@@ -1,0 +1,310 @@
+/* Design tokens only, no colour literals: App.theme re-themes all of it. */
+Screen {
+    background: $surface;
+    color: $foreground;
+}
+
+/* The header row: orrery, the tabs, then the tab's own controls. */
+#header {
+    dock: top;
+    height: 1;
+    background: $panel;
+}
+
+#brand {
+    width: auto;
+    padding: 0 1;
+    color: $text-accent;
+    text-style: bold;
+}
+
+/* One row: the underline goes, and the active tab is marked by its own colour. Never
+   narrower than the two names: a long control gives way instead. */
+_Tabs {
+    width: 1fr;
+    min-width: 14;
+    height: 1;
+}
+
+_Tabs Underline {
+    display: none;
+}
+
+_Tabs Tab.-active {
+    color: $text-accent;
+    text-style: bold;
+}
+
+#views, #controls {
+    width: auto;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+/* The tabs' panes, with the chat docked beside them; the overlay layer is for the chat
+   opened over a narrow screen, so it covers the content instead of squeezing it. */
+#body {
+    height: 1fr;
+    layers: default overlay;
+}
+
+#tabs {
+    width: 1fr;
+    height: 1fr;
+}
+
+/* The Week tab: the top panel (the week or the month), then the lower row: so far this week
+   above the last 5 weeks, beside the cursor's day. The Report tab: the completion heatmap,
+   then the lower row: your stats beside the mentors' evaluations. From 160 columns a lower
+   row fills the window under its top panel, side by side, and the day panel and the
+   evaluations scroll themselves; narrower, the panels stack and the pane scrolls them. Lines
+   are cut to the width (the views cut or wrap their own), never wrapped here. */
+WeekPane, ReportPane {
+    height: 1fr;
+    scrollbar-size-vertical: 1;
+}
+
+WeekView, MonthView, ReportView {
+    width: 1fr;
+    height: auto;
+    text-wrap: nowrap;
+}
+
+/* The timetable's gutter has its own margin: every column it can spare is a day's. */
+MonthView, ReportView {
+    padding: 0 1;
+}
+
+/* The subject strip, cut with an ellipsis: nowrap alone still folds an overlong line. */
+#subjects {
+    height: 1;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+Heatmap {
+    height: auto;
+    margin-top: 1;
+    text-wrap: nowrap;
+}
+
+#lower, #lower-left, DayPanel, #report-lower, Evaluations {
+    height: auto;
+}
+
+SoFar, LastWeeks, YourStats {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+DayPanel, Evaluations {
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+DayText, EvaluationsText {
+    width: 1fr;
+    height: auto;
+}
+
+Screen.-panels #lower, Screen.-panels #report-lower {
+    layout: horizontal;
+    height: 1fr;
+    min-height: 14;
+}
+
+/* At least as wide as the stats table, which YourStats sets from its columns. */
+Screen.-panels YourStats {
+    width: 2fr;
+    height: 100%;
+}
+
+Screen.-panels Evaluations {
+    width: 3fr;
+    height: 100%;
+}
+
+Screen.-panels #lower-left {
+    width: 2fr;
+    min-width: 53;  /* so far's caption beside its title, through 2-digit counts */
+    height: 100%;
+}
+
+Screen.-panels LastWeeks {
+    height: 1fr;
+}
+
+Screen.-panels DayPanel {
+    width: 3fr;
+    height: 100%;
+}
+
+/* Every area is a panel: its title on the left of its top border and a muted caption on the
+   right. Textual draws a subtitle in the bottom border, so views.panel_title puts the caption
+   in the title, styling the title and caption itself: the edge between them takes the
+   title's colour, which is the border's. On a light theme the panel tokens are near the
+   background, so the border is darker there. */
+.panel {
+    border: round $panel-lighten-2;
+    border-title-color: $panel-lighten-2;
+    border-subtitle-color: $foreground-muted;
+}
+
+App.-light-mode .panel {
+    border: round $panel-darken-3;
+    border-title-color: $panel-darken-3;
+}
+
+/* The chat: on the right from 110 columns, 30% of the window from 37 to 72 columns;
+   narrower, a one-line strip at the bottom that c opens over the content until esc. Only
+   #strip and #chat-body are shown or hidden here: the widgets inside them are shown and
+   hidden by the code. */
+Screen.-wide #chat {
+    dock: right;
+    width: 30%;
+    min-width: 37;
+    max-width: 72;
+}
+
+Screen.-narrow #chat {
+    dock: bottom;
+    height: 1;
+}
+
+Screen.-narrow #chat.-overlay {
+    layer: overlay;
+    dock: right;
+    width: 37;
+    height: 100%;
+}
+
+#strip {
+    display: none;
+    height: 1;
+    padding: 0 1;
+    background: $panel;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+Screen.-narrow #chat #strip {
+    display: block;
+}
+
+Screen.-narrow #chat #chat-body {
+    display: none;
+}
+
+Screen.-narrow #chat.-overlay #strip {
+    display: none;
+}
+
+Screen.-narrow #chat.-overlay #chat-body {
+    display: block;
+}
+
+#chat-body {
+    height: 1fr;
+    background: $surface;
+}
+
+#log {
+    height: 1fr;
+    padding: 0 1;
+}
+
+#live, #note, #hint {
+    display: none;
+}
+
+#hint {
+    margin-top: 1;
+}
+
+#note {
+    padding: 0 1;
+    color: $text-muted;
+}
+
+/* The waiting proposal, inline under the transcript, with its y/n bar. */
+#proposal {
+    display: none;
+    margin-top: 1;
+    border: round $accent;
+}
+
+#chat-input {
+    height: 1;
+    border: none;
+    padding: 0 1;
+    background: $panel;
+}
+
+/* Below 80 columns or 24 rows: one line saying so, in place of the frame. */
+#too-small {
+    display: none;
+}
+
+App.-tiny #header, App.-tiny #body, App.-tiny #bottom {
+    display: none;
+}
+
+App.-tiny #too-small {
+    display: block;
+    height: 1;
+    padding: 0 1;
+}
+
+/* The picker and the key line share one bottom-docked container: two independently docked
+   widgets would clip each other. */
+#bottom {
+    dock: bottom;
+    height: auto;
+}
+
+/* The key line: three rows (write and danger, view, nav), the same on every tab, so a tab
+   switch never reflows the screen. Each row is fitted to the width, never wrapped. */
+#footer {
+    height: 3;
+    padding: 0 1;
+    text-wrap: nowrap;
+    text-overflow: clip;  /* a row too long is cut, never folded onto the next */
+}
+
+/* The theme picker: border title, body, border subtitle answer what am I setting, what is
+   the value, what are the keys. Not a modal: a modal would cover what you are previewing. */
+#theme-picker {
+    height: 3;
+    border: round $accent;
+    border-title-align: left;
+    border-subtitle-align: left;
+    padding: 0 1;
+}
+
+Popup, Confirm {
+    align: center middle;
+    background: $background 60%;
+}
+
+/* The box: the popup's scrolls, as ? outgrows 24 rows; the confirm's is its text. */
+#popup-scroll, Confirm #popup-text {
+    width: auto;
+    max-width: 90%;
+    height: auto;
+    max-height: 90%;
+    padding: 0 1;
+    border: round $panel-lighten-2;
+    background: $surface;
+}
+
+App.-light-mode #popup-scroll, App.-light-mode Confirm #popup-text {
+    border: round $panel-darken-3;  /* as a .panel's on a light theme */
+}
+
+#popup-scroll #popup-text {
+    width: auto;
+    max-width: 100%;  /* a long line wraps inside the box */
+}

@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.egg-info/
+build/
+dist/
+
+# Local agent workspaces and brainstorm mockups
+.superpowers/
+
+# Superpowers plans and specs stay local
+docs/superpowers/

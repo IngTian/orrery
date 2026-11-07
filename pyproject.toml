@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orrery"
+version = "0.3.0"
+description = "A terminal study-week planner: a TUI, an organizer chat, and an MCP board for AI mentors."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Zeying Tian" }]
+keywords = ["study planner", "tui", "textual", "mcp", "claude-code", "sqlite", "learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Education",
+]
+dependencies = ["textual>=8.2,<9", "mcp>=2.3,<3"]
+
+[project.urls]
+Homepage = "https://github.com/IngTian/orrery"
+Repository = "https://github.com/IngTian/orrery"
+Issues = "https://github.com/IngTian/orrery/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "anyio>=4",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+orrery = "orrery.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["orrery*"]
+
+[tool.setuptools.package-data]
+"orrery.tui" = ["*.tcss"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
