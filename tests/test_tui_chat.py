@@ -1,12 +1,14 @@
 """The organizer chat on screen, through the Pilot: a turn streamed into the docked panel, esc,
-a second line while answering, x's confirm, remembered notes, the M and h popups, and the
-transcript across restarts. The organizer is tests/fake_claude.py's fake, never the real CLI."""
+a second line while answering, x's confirm, remembered notes, the M and h popups, the
+transcript across restarts, a proposal answered by typing y or n, and the organizer's bold.
+The organizer is tests/fake_claude.py's fake, never the real CLI."""
 
 import threading
 import time
 from contextlib import closing, contextmanager
 from datetime import timedelta
 
+import pytest
 from fake_claude import INIT_OK, delta, make_fake, read_calls, result_ok, transcript_tail
 from helpers import NOW, TODAY, chat_keys, propose_move, remember_at, settle, state_of
 from test_tui import SIZE, _text, _until
@@ -15,9 +17,10 @@ from textual.strip import Strip
 
 from orrery import db, store, text
 from orrery.organizer import sessions, turn
+from orrery.organizer.sessions import Line
 from orrery.tui import keymap
 from orrery.tui.app import OrreryApp
-from orrery.tui.chat import ChatInput
+from orrery.tui.chat import ChatInput, render_line
 from orrery.tui.views import Confirm
 
 STILL = "the organizer is still answering; esc cancels"
@@ -325,3 +328,127 @@ async def test_the_empty_input_says_message_orrery_focused_or_not(week_home):
         await pilot.press("c")
         await pilot.pause()
         assert line.render_line(0).text.strip() == "› message orrery" and line.has_focus
+
+
+KEPT_LINE = "orrery: kept proposal #{}"
+DISCARDED_LINE = "orrery: discarded proposal #{}; its requests stay pending"
+
+
+@pytest.mark.parametrize(
+    "typed, state, note, said",
+    [
+        ("y", "kept", "kept", KEPT_LINE),
+        (" Yes ", "kept", "kept", KEPT_LINE),
+        ("n", "discarded", "discarded; requests stay pending", DISCARDED_LINE),
+        ("NO", "discarded", "discarded; requests stay pending", DISCARDED_LINE),
+    ],
+)
+async def test_typing_y_or_n_answers_the_shown_proposal(
+    week_home, tmp_path, typed, state, note, said
+):
+    """A bare y, yes, n or no typed while the diff shows is the y or n key: never sent to the
+    organizer, no turn, and orrery says what happened in the chat."""
+    with closing(db.open_existing(week_home)) as conn:
+        p = propose_move(conn)
+    fake = make_fake(tmp_path, {"events": [INIT_OK, result_ok("Kept.")]})
+    app = _app(week_home, fake)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        await chat_keys(pilot, app, *typed, "enter")
+        assert app.turn_cancel is None
+        await settle(pilot, app)
+        assert app.query_one(ChatInput).value == "" and _text(app, "#note") == note
+        assert not app.query_one("#proposal").display and app.shown_proposal is None
+        assert _talk(app) == [STARTED, said.format(p.id)]
+    assert not read_calls(fake)
+    with closing(db.open_existing(week_home)) as conn:
+        assert state_of(conn, p.id) == state
+
+
+@pytest.mark.parametrize("key, said", [("y", KEPT_LINE), ("n", DISCARDED_LINE)])
+async def test_the_y_and_n_keys_say_so_in_the_chat(week_home, key, said):
+    """The organizer reads the transcript: orrery's line there is how it learns the answer."""
+    with closing(db.open_existing(week_home)) as conn:
+        p = propose_move(conn)
+    app = _app(week_home)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        await pilot.press(key)
+        await settle(pilot, app)
+        assert _talk(app)[-1] == said.format(p.id)
+    assert [(ln.speaker, ln.text) for ln in transcript_tail(week_home, 1)] == [
+        ("orrery", said.format(p.id).removeprefix("orrery: "))
+    ]
+
+
+@pytest.mark.parametrize("waiting, typed", [(False, "y"), (True, "yes please")])
+async def test_other_lines_and_y_without_a_proposal_go_to_the_organizer(
+    week_home, tmp_path, waiting, typed
+):
+    if waiting:
+        with closing(db.open_existing(week_home)) as conn:
+            p = propose_move(conn)
+    fake = make_fake(tmp_path, {"events": [INIT_OK, delta("Press y."), result_ok("Press y.")]})
+    app = _app(week_home, fake)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        await chat_keys(pilot, app, *typed, "enter")
+        await _until(pilot, lambda: _organizer_done(app))
+        await settle(pilot, app)
+        assert _talk(app)[-2:] == [f"you: {typed}", "organizer: Press y."]
+        assert app.query_one("#proposal").display == waiting
+    (call,) = read_calls(fake)
+    assert call["stdin"].endswith(f"\n\n{typed}")
+    if waiting:
+        with closing(db.open_existing(week_home)) as conn:
+            assert state_of(conn, p.id) == "waiting"
+
+
+async def test_typing_y_while_the_organizer_answers_keeps_as_the_key_does(week_home, tmp_path):
+    """The y key keeps mid-turn, so a typed y does too; the turn runs on."""
+    with closing(db.open_existing(week_home)) as conn:
+        p = propose_move(conn)
+    fake = make_fake(
+        tmp_path,
+        {"events": [INIT_OK, delta("Let me look."), result_ok("Let me look.")], "linger": 30},
+    )
+    app = _app(week_home, fake)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        await chat_keys(pilot, app, *"first", "enter")
+        await _until(pilot, lambda: "organizer: Let me look." in _talk(app))
+        await pilot.press("y", "enter")
+        await _until(pilot, lambda: KEPT_LINE.format(p.id) in _talk(app))
+        assert app.query_one(ChatInput).value == "" and app.turn_cancel is not None
+        await pilot.press("escape")
+        await _until(pilot, lambda: _organizer_done(app))
+        await settle(pilot, app)
+    assert len(read_calls(fake)) == 1
+    with closing(db.open_existing(week_home)) as conn:
+        assert state_of(conn, p.id) == "kept"
+
+
+def test_an_organizer_line_shows_its_bold_and_drops_unpaired_markers():
+    """Content spans built by hand: only ** pairs are read, never markup; a stray ** goes."""
+    c = render_line(Line("", "organizer", "**Proposal #1 ready.** see **Mon** [b]and[/b] **"))
+    assert c.plain == "organizer: Proposal #1 ready. see Mon [b]and[/b] "
+    bold = [c.plain[s.start : s.end] for s in c.spans if str(s.style) == "bold"]
+    assert bold == ["Proposal #1 ready.", "Mon"]
+    assert render_line(Line("", "organizer", "a ** b")).plain == "organizer: a  b"
+    assert render_line(Line("", "you", "**as typed**")).plain == "you: **as typed**"
+
+
+async def test_the_streaming_reply_shows_its_bold(week_home, tmp_path):
+    fake = make_fake(
+        tmp_path,
+        {"events": [INIT_OK, delta("**Request #2** fits."), result_ok("x")], "linger": 30},
+    )
+    app = _app(week_home, fake)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        await chat_keys(pilot, app, *"hi", "enter")
+        await _until(pilot, lambda: "organizer: Request #2 fits." in _talk(app))
+        live = app.query_one("#live").content
+        assert [live.plain[s.start : s.end] for s in live.spans] == ["Request #2"]
+        await pilot.press("escape")
+        await _until(pilot, lambda: _organizer_done(app))

@@ -5,7 +5,8 @@ diff, the last key's line, and the input.
 
 From 110 columns it is docked on the right, 30% of the window from 37 to 72 columns wide.
 Narrower it folds to a one-line strip at the bottom, and c opens it over the content until
-esc. Transcript text reaches the screen as plain Content, never parsed as markup.
+esc. Transcript text reaches the screen as plain Content, never parsed as markup; only an
+organizer row's ** pairs are read, as bold spans built by hand.
 """
 
 from collections.abc import Callable, Sequence
@@ -41,10 +42,21 @@ def _divider(line: Line) -> bool:
     return line.speaker == "orrery" and line.text == STARTED and bool(line.at)
 
 
+def _reply(text: str) -> Content:
+    """An organizer row, each **pair**'s span bold and its markers gone; an unpaired ** goes
+    too. Spans built by hand: nothing else in the text is read, never as markup."""
+    parts = text.split("**")
+    last = len(parts) - 1  # an odd count of markers leaves the last part outside any pair
+    bold = ((p, "bold") if i % 2 and i < last else p for i, p in enumerate(parts))
+    return Content.assemble("organizer: ", *bold)
+
+
 def render_line(line: Line) -> Content:
     """A transcript row as `<speaker>: <text>`; a chat's first row as its divider."""
     if _divider(line):
         return Content.styled(f"── new chat, {_day(line.at)} ──", MUTED)
+    if line.speaker == "organizer":
+        return _reply(line.text)
     return Content.styled(f"{line.speaker}: {line.text}", _STYLE.get(line.speaker, ""))
 
 
@@ -241,7 +253,7 @@ class ChatPanel(Vertical):
         """The reply so far (or the working line), under the transcript; None clears it."""
         self._live = text
         live = self.query_one("#live", Static)
-        live.update(Content(f"organizer: {text}") if text is not None else "")
+        live.update(_reply(text) if text is not None else "")
         live.display = text is not None
         self._paint_strip()
 
@@ -270,7 +282,7 @@ class ChatPanel(Vertical):
         elif self._note:
             line = self._note
         elif self._live is not None:
-            line = f"organizer: {self._live}"
+            line = _reply(self._live).plain
         else:
             line = self._last
         self.query_one("#strip", Static).update(line)

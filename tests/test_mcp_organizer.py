@@ -378,6 +378,29 @@ async def test_propose_text_marks_struck(week_home):
     assert not err and "+ Thu 11/12  ~~math · learn ×2~~, geography ×1" in out.splitlines()
 
 
+async def test_propose_text_quotes_each_request_once(week_home):
+    """The diff the organizer gets back cites the request by number on each line it's behind,
+    and quotes it once."""
+    with closing(db.open_existing(week_home)) as conn:
+        r = channels.request(
+            conn, channel="math", text="lorem ipsum sed do", kind="learn", delta=1, by=None,
+            key="q1", now=NOW,
+        )  # fmt: skip
+    add = {"op": "add", "part": "main", "subject": "math", "kind": "learn", "sessions": 1}
+    args = {
+        "operations": [{**add, "date": d, "for_request": r} for d in ("2026-11-14", "2026-11-15")],
+        "rationale": "x",
+        "dispositions": [{"request_id": r, "verdict": "grant"}],
+    }
+    err, out = await _call(week_home, "propose", args)
+    rows = out.splitlines()
+    assert not err and out.count("lorem ipsum sed do") == 1
+    assert f'  math request #{r}: "lorem ipsum sed do"' in rows
+    plus = [x for x in rows if x.startswith("+ ")]
+    assert [x[:11] for x in plus] == ["+ Sat 11/14", "+ Sun 11/15"]
+    assert all(x.endswith(f"  (request #{r})") for x in plus)
+
+
 # sha256[:16] of each organizer tool's description and of its system prompt before orrery
 # took on the mentor protocol (cf17604): the mentor's rules stay out of the organizer's role.
 _ORGANIZER_DOCS = {
@@ -407,7 +430,7 @@ async def test_organizer_role_unchanged(week_home):
     async with Client(srv, mode="legacy") as c:
         assert c.instructions is None
         assert {t.name: _h(t.description) for t in (await c.list_tools()).tools} == _ORGANIZER_DOCS
-    assert _h(prompt.system()) == "2b1191c7dbf69493"
+    assert _h(prompt.system()) == "a8c5260bbe070ce2"
     _, today = await _call(week_home, "today", {"subject": "math"})
     assert today.startswith("<orrery:untrusted>Thu 11/12 · today\n")
     with closing(db.open_existing(week_home)) as conn:

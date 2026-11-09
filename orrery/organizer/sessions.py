@@ -171,6 +171,18 @@ def all_lines(
     return [Line(*r) for r in rows]
 
 
+def unheard(conn: sqlite3.Connection, session_id: int) -> list[str]:
+    """orrery's rows since the organizer's newest reply in the session, oldest first: what a
+    resumed Claude session was never told, such as a keep or a discard."""
+    rows = conn.execute(
+        "select text from transcript where session_id = ? and speaker = 'orrery' and id >"
+        " (select coalesce(max(id), 0) from transcript where session_id = ?"
+        " and speaker = 'organizer') order by id",
+        (session_id, session_id),
+    )
+    return [r[0] for r in rows]
+
+
 def has_talk(conn: sqlite3.Connection, session_id: int) -> bool:
     """True if any rows by you or the organizer exist."""
     row = conn.execute(

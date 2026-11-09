@@ -73,6 +73,7 @@ logger = logging.getLogger(__name__)
 UNAVAILABLE = "orrery: data unavailable ({})"
 KEPT = "kept"
 DISCARDED = "discarded; requests stay pending"
+ANSWERS = {"y": "y", "yes": "y", "n": "n", "no": "n"}  # typed, while a diff shows: its keys
 UNDONE = "undone"
 NOTHING_TO_UNDO = "nothing to undo"
 WORKING = "working… (esc cancels)"
@@ -100,6 +101,11 @@ def _window(last: date, starts: date, day: date, weeks: int) -> date:
     hi = schedule.week_start(day)
     lo = min(hi, schedule.week_start(starts) + timedelta(weeks=weeks - 1))
     return min(max(lo, schedule.week_start(last)), hi)
+
+
+def _tell(conn: sqlite3.Connection, now: datetime, line: str) -> None:
+    """orrery's line in the active chat, for the organizer's next turn to hear."""
+    sessions.say(conn, sessions.ensure(conn, now).id, "orrery", line, now)
 
 
 def _names(names, current: str) -> Content:
@@ -769,11 +775,13 @@ class OrreryApp(App):
         self.app_reload()  # the transcript, and a proposal the turn made
 
     def app_keep(self) -> None:
-        """Keep the proposal whose diff is shown, never a newer one; one y per diff."""
+        """Keep the proposal whose diff is shown, never a newer one; one y per diff. orrery
+        says so in the chat, which is how the organizer hears it."""
         pid, self.shown_proposal = self.shown_proposal, None
 
         def keep(conn: sqlite3.Connection, now: datetime, today: date) -> str:
             proposals.keep(conn, pid, now=now, today=today)
+            _tell(conn, now, f"kept proposal #{pid}")
             return KEPT
 
         self._edit(keep)
@@ -783,6 +791,7 @@ class OrreryApp(App):
 
         def discard(conn: sqlite3.Connection, now: datetime, today: date) -> str:
             proposals.discard(conn, pid, now=now)
+            _tell(conn, now, f"discarded proposal #{pid}; its requests stay pending")
             return DISCARDED
 
         self._edit(discard)
@@ -799,11 +808,17 @@ class OrreryApp(App):
     def on_chat_panel_submitted(self, event: ChatPanel.Submitted) -> None:
         """The input's line: one organizer turn, the user's line and the working line shown at
         once, the input kept for the next. While a turn runs nothing starts, and the line
-        stays in the input."""
+        stays in the input. A bare y or n (yes, no) while a diff is shown is that key, as if
+        pressed outside the input, even mid-turn: never the organizer's."""
         line = event.text.strip()
         if not line:
             return
         chat = self.query_one(ChatPanel)
+        key = ANSWERS.get(line.lower())
+        if key is not None and self.shown_proposal is not None:
+            self.query_one(ChatInput).clear()
+            self.action_dispatch(key)
+            return
         if self.turn_cancel is not None:
             chat.note(STILL_ANSWERING)
             return

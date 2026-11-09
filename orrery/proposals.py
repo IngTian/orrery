@@ -272,11 +272,17 @@ def _line(sign: Literal["-", "+"], head: str, items: list[tuple[str, bool]], suf
     return DiffLine(sign, (text if items else text + "rest") + suffix, tuple(struck))
 
 
-def _asks(conn: sqlite3.Connection, related: Sequence[Op]) -> str:
-    """The `  (channel: "request text")` suffix for each request behind these ops."""
+def _rids(related: Sequence[Op]) -> list[int]:
+    """The requests behind these ops, each once, in order."""
     named = (getattr(op, "for_request", None) for op in related)
-    rids = dict.fromkeys(r for r in named if r is not None)
-    return "".join('  ({}: "{}")'.format(*_request(conn, r)) for r in rids)
+    return list(dict.fromkeys(r for r in named if r is not None))
+
+
+def _asks(related: Sequence[Op]) -> str:
+    """The `  (request #n, request #m)` suffix naming the requests behind these ops; their
+    text is quoted once, under the rationale."""
+    rids = _rids(related)
+    return f"  ({', '.join(f'request #{r}' for r in rids)})" if rids else ""
 
 
 def _status(day: Sequence[Block], op: ops.Report) -> str:
@@ -320,6 +326,9 @@ def _diff(conn: sqlite3.Connection, p: Proposal, today: date) -> list[DiffLine]:
         _check_requests(conn, p.ops, p.dispositions)
     except Exception as e:  # e.g. a proposal stored before a check existed
         return [*lines, DiffLine(" ", f"can't apply now: {e}")]
+    for r in _rids(p.ops):  # pending, as just checked
+        channel, said = _request(conn, r)
+        lines.append(DiffLine(" ", f'{channel} request #{r}: "{said}"'))
     dates = sorted(ops.touched_dates(p.ops))
     boards = {
         m: (board.build(conn, m, today), board.build(conn, m, today, plan=plan))
@@ -329,12 +338,12 @@ def _diff(conn: sqlite3.Connection, p: Proposal, today: date) -> list[DiffLine]:
         old, new = (b.days[d.weekday()].cells for b in boards[schedule.week_start(d)])
         related = [op for op in p.ops if d in ops.touched_dates([op])]
         lines.append(_line("-", fmt_day(d), _cells(old)))
-        lines.append(_line("+", fmt_day(d), _cells(new), _asks(conn, related)))
+        lines.append(_line("+", fmt_day(d), _cells(new), _asks(related)))
     old_tmpl = schedule.read_template(conn)
     for w in sorted(ops.touched_weekdays(p.ops)):
         related = [op for op in p.ops if w in ops.touched_weekdays([op])]
         lines.append(_line("-", f"every {_WKD[w]}", _blocks(old_tmpl[w])))
-        lines.append(_line("+", f"every {_WKD[w]}", _blocks(tmpl[w]), _asks(conn, related)))
+        lines.append(_line("+", f"every {_WKD[w]}", _blocks(tmpl[w]), _asks(related)))
     for op in sorted((op for op in p.ops if type(op) in _GROUP), key=lambda op: _GROUP[type(op)]):
         lines += _op_lines(conn, op, plan)
     for d in p.dispositions:
