@@ -9,6 +9,7 @@ esc. Transcript text reaches the screen as plain Content, never parsed as markup
 organizer row's ** pairs are read, as bold spans built by hand.
 """
 
+import re
 from collections.abc import Callable, Sequence
 from datetime import date
 
@@ -42,13 +43,18 @@ def _divider(line: Line) -> bool:
     return line.speaker == "orrery" and line.text == STARTED and bool(line.at)
 
 
+# a **span** outside any word, its text starting and ending with neither space nor *
+_BOLD = re.compile(r"(?<!\w)\*\*(?=[^\s*])(.+?)(?<=[^\s*])\*\*(?!\w)")
+_STRAY = re.compile(r"(?<!\w)\*\*|\*\*(?!\w)")  # any other **, unless inside a word (x**2)
+
+
 def _reply(text: str) -> Content:
     """An organizer row, each **pair**'s span bold and its markers gone; an unpaired ** goes
-    too. Spans built by hand: nothing else in the text is read, never as markup."""
-    parts = text.split("**")
-    last = len(parts) - 1  # an odd count of markers leaves the last part outside any pair
-    bold = ((p, "bold") if i % 2 and i < last else p for i, p in enumerate(parts))
-    return Content.assemble("organizer: ", *bold)
+    too, but not one inside a word. Spans built by hand: nothing else in the text is read,
+    never as markup."""
+    parts = _BOLD.split(text)  # plain, bold, plain, ...
+    styled = ((p, "bold") if i % 2 else _STRAY.sub("", p) for i, p in enumerate(parts))
+    return Content.assemble("organizer: ", *styled)
 
 
 def render_line(line: Line) -> Content:

@@ -430,7 +430,7 @@ async def test_organizer_role_unchanged(week_home):
     async with Client(srv, mode="legacy") as c:
         assert c.instructions is None
         assert {t.name: _h(t.description) for t in (await c.list_tools()).tools} == _ORGANIZER_DOCS
-    assert _h(prompt.system()) == "a8c5260bbe070ce2"
+    assert _h(prompt.system()) == "0cf9b223be05a133"
     _, today = await _call(week_home, "today", {"subject": "math"})
     assert today.startswith("<orrery:untrusted>Thu 11/12 · today\n")
     with closing(db.open_existing(week_home)) as conn:

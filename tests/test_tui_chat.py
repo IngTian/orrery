@@ -3,6 +3,7 @@ a second line while answering, x's confirm, remembered notes, the M and h popups
 transcript across restarts, a proposal answered by typing y or n, and the organizer's bold.
 The organizer is tests/fake_claude.py's fake, never the real CLI."""
 
+import sqlite3
 import threading
 import time
 from contextlib import closing, contextmanager
@@ -11,11 +12,11 @@ from datetime import timedelta
 import pytest
 from fake_claude import INIT_OK, delta, make_fake, read_calls, result_ok, transcript_tail
 from helpers import NOW, TODAY, chat_keys, propose_move, remember_at, settle, state_of
-from test_tui import SIZE, _text, _until
+from test_tui import SIZE, _text, _until, _week
 from textual.geometry import Region
 from textual.strip import Strip
 
-from orrery import db, store, text
+from orrery import db, proposals, store, text
 from orrery.organizer import sessions, turn
 from orrery.organizer.sessions import Line
 from orrery.tui import keymap
@@ -354,31 +355,73 @@ async def test_typing_y_or_n_answers_the_shown_proposal(
     app = _app(week_home, fake)
     async with app.run_test(size=SIZE) as pilot:
         await settle(pilot, app)
+        assert "→ Fri" not in _week(app)
         await chat_keys(pilot, app, *typed, "enter")
         assert app.turn_cancel is None
         await settle(pilot, app)
         assert app.query_one(ChatInput).value == "" and _text(app, "#note") == note
         assert not app.query_one("#proposal").display and app.shown_proposal is None
         assert _talk(app) == [STARTED, said.format(p.id)]
+        assert ("→ Fri 13" in _week(app)) == (state == "kept")  # the board shows the new plan
     assert not read_calls(fake)
     with closing(db.open_existing(week_home)) as conn:
         assert state_of(conn, p.id) == state
 
 
-@pytest.mark.parametrize("key, said", [("y", KEPT_LINE), ("n", DISCARDED_LINE)])
-async def test_the_y_and_n_keys_say_so_in_the_chat(week_home, key, said):
-    """The organizer reads the transcript: orrery's line there is how it learns the answer."""
+@pytest.mark.parametrize(
+    "keys, said",
+    [("y", KEPT_LINE), ("n", DISCARDED_LINE), ("yu", "orrery: undid the last kept proposal")],
+)
+async def test_the_y_n_and_u_keys_say_so_in_the_chat(week_home, keys, said):
+    """orrery's line in the transcript: the answer, as news for the organizer's next turn."""
     with closing(db.open_existing(week_home)) as conn:
         p = propose_move(conn)
     app = _app(week_home)
     async with app.run_test(size=SIZE) as pilot:
         await settle(pilot, app)
-        await pilot.press(key)
-        await settle(pilot, app)
+        for key in keys:
+            await pilot.press(key)
+            await settle(pilot, app)
         assert _talk(app)[-1] == said.format(p.id)
     assert [(ln.speaker, ln.text) for ln in transcript_tail(week_home, 1)] == [
         ("orrery", said.format(p.id).removeprefix("orrery: "))
     ]
+
+
+async def test_n_on_a_proposal_kept_in_another_window_says_stale(week_home):
+    """Nothing is discarded, so orrery says nothing was, in the note or the chat."""
+    with closing(db.open_existing(week_home)) as conn:
+        p = propose_move(conn)
+    app = _app(week_home)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        with closing(db.open_existing(week_home)) as conn:
+            proposals.keep(conn, p.id, now=NOW, today=TODAY)
+        await pilot.press("n")
+        await settle(pilot, app)
+        assert _text(app, "#note") == proposals.STALE
+    assert [ln.text for ln in transcript_tail(week_home, 1)] == ["new chat started"]
+    with closing(db.open_existing(week_home)) as conn:
+        assert state_of(conn, p.id) == "kept"
+
+
+async def test_a_keep_stands_when_its_chat_line_cannot_be_written(week_home, monkeypatch):
+    """The keep commits before orrery's line: a locked chat can't make it read as failed."""
+    with closing(db.open_existing(week_home)) as conn:
+        p = propose_move(conn)
+    app = _app(week_home)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+
+        def locked(*_a, **_k):
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(sessions, "say", locked)
+        await pilot.press("y")
+        await settle(pilot, app)
+        assert _text(app, "#note") == "kept" and "→ Fri 13" in _week(app)
+    with closing(db.open_existing(week_home)) as conn:
+        assert state_of(conn, p.id) == "kept"
 
 
 @pytest.mark.parametrize("waiting, typed", [(False, "y"), (True, "yes please")])
@@ -435,6 +478,8 @@ def test_an_organizer_line_shows_its_bold_and_drops_unpaired_markers():
     bold = [c.plain[s.start : s.end] for s in c.spans if str(s.style) == "bold"]
     assert bold == ["Proposal #1 ready.", "Mon"]
     assert render_line(Line("", "organizer", "a ** b")).plain == "organizer: a  b"
+    maths = render_line(Line("", "organizer", "x**2 + y**2"))  # inside words: as written
+    assert maths.plain == "organizer: x**2 + y**2" and not maths.spans
     assert render_line(Line("", "you", "**as typed**")).plain == "you: **as typed**"
 
 

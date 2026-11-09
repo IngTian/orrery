@@ -111,6 +111,16 @@ def propose_move_at(home: Path) -> None:
         propose_move(conn)
 
 
+def keep_waiting_at(home: Path) -> None:
+    """The waiting proposal, if any, kept on a connection of its own and said in the chat, as
+    a y pressed while the organizer answers does."""
+    with closing(db.open_existing(home)) as conn:
+        row = conn.execute("select id from proposals where state = 'waiting'").fetchone()
+        if row is not None:
+            proposals.keep(conn, row[0], now=NOW, today=TODAY)
+            sessions.say(conn, sessions.active(conn).id, "orrery", f"kept proposal #{row[0]}", NOW)
+
+
 def remember_at(home: Path, text: str = "protect Monday math") -> None:
     """sessions.remember on a connection of its own, closed after."""
     with closing(db.open_existing(home)) as conn:

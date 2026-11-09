@@ -222,7 +222,7 @@ A pair (`←→`, `↑↓`, `[ ]`) is one hint on the line; `shift+tab` and `esc
 | `n` | no | (confirm) No: change nothing. |
 | `esc` | no | (confirm) As `n`. |
 
-While the chat input has focus, letters type into it and only `esc` and `enter` act there. `y` and `n` act on a waiting proposal once you leave the input, whichever tab is open; in the input, a line that is only `y`, `yes`, `n` or `no` does the same when you press `enter`, and never goes to the organizer. While the organizer is answering, a second line and `x` start nothing; `esc` cancels the answer.
+While the chat input has focus, letters type into it and only `esc` and `enter` act there. `y` and `n` act on a waiting proposal once you leave the input, whichever tab is open; in the input, while a proposal's diff shows, a line that is only `y`, `yes`, `n` or `no` does the same when you press `enter`, even while the organizer is answering, instead of going to the organizer. While the organizer is answering, any other line and `x` start nothing; `esc` cancels the answer.
 
 ## Themes
 
@@ -331,7 +331,7 @@ The organizer:
 
 **Memory** records only what you say or confirm, such as a preference. It does not record what was done when; the database keeps that history. To drop a memory note, press `M` to see the list with its `#id`, then ask the organizer to forget that id.
 
-The organizer cannot change the plan directly: only your `y` keeps a proposal. When you keep or discard one, orrery says so in the chat (`kept proposal #3`), and the organizer's next turn starts with that line and whether a proposal is waiting, so it never has to guess.
+The organizer cannot change the plan directly: only your `y` keeps a proposal. When you keep, discard or undo one, orrery says so in the chat (`kept proposal #3`). The organizer's next turn starts with whether a proposal is waiting or how the last one ended (`the last, #3, was kept`), read from the proposals themselves, so it never has to guess, even when you answered while it was still replying or in another window.
 
 ### New chat
 

@@ -198,6 +198,8 @@ def test_discard_leaves_requests_pending(week_db):
     proposals.discard(week_db, p.id, now=NOW)
     assert state_of(week_db, p.id) == "discarded" and proposals.waiting(week_db) is None
     assert [m.id for m in channels.pending_requests(week_db)] == [rid]
+    with pytest.raises(proposals.Stale, match=proposals.STALE):  # no longer waiting
+        proposals.discard(week_db, p.id, now=NOW)
 
 
 def test_your_report_creates_progress(week_db):

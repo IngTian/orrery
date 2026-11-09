@@ -24,7 +24,7 @@ from fake_claude import (
     run,
     transcript_tail,
 )
-from helpers import propose_move, remember_at
+from helpers import TODAY, propose_move, remember_at
 
 from orrery import db, proposals, store
 from orrery.ai import fence
@@ -98,8 +98,8 @@ def test_system_prompt_pins_keeps_plain_text_and_silent_tools():
         "A bare y or n the user writes while a proposal waits is orrery's to handle",
         'if they write anything else that means it, such as "keep it", tell them to press y (or'
         " type y)",
-        "The chat is a terminal that shows no Markdown: write plain sentences, with no **, #,"
-        " backticks or bullet syntax",
+        "The chat is a terminal that shows no Markdown: replies, rationale and notes are plain"
+        " sentences, with no **, #, backticks or bullet syntax",
         "call tools silently, then write one reply after them, never commentary on your own"
         " tool use",
     ):
@@ -115,6 +115,40 @@ def test_state_says_whether_a_proposal_is_waiting(week_home, tmp_path):
     first, second = (c["stdin"] for c in read_calls(fake))
     assert "2026-11-12\n\nno proposal waiting\n\nmemory:" in first
     assert f"2026-11-12\n\nproposal #{pid} is waiting for the user's y/n\n\nmemory:" in second
+
+
+def test_state_says_how_the_last_proposal_ended(week_home, tmp_path):
+    fake = make_fake(tmp_path, OK)
+    with closing(db.open_existing(week_home)) as conn:
+        dropped = propose_move(conn).id
+        proposals.discard(conn, dropped, now=FROZEN_NOW)
+    run(week_home, fake, "a")
+    with closing(db.open_existing(week_home)) as conn:
+        kept = propose_move(conn).id
+        proposals.keep(conn, kept, now=FROZEN_NOW, today=TODAY)
+    run(week_home, fake, "b")
+    with closing(db.open_existing(week_home)) as conn:
+        proposals.undo_last(conn, now=FROZEN_NOW, today=TODAY)
+    run(week_home, fake, "c")
+    a, b, c = (call["stdin"] for call in read_calls(fake))
+    assert f"\n\nno proposal waiting; the last, #{dropped}, was discarded\n\nmemory:" in a
+    assert f"\n\nno proposal waiting; the last, #{kept}, was kept\n\nmemory:" in b
+    assert f"\n\nno proposal waiting; the last, #{kept}, was kept, then undone\n\nmemory:" in c
+
+
+def test_a_keep_while_the_organizer_answers_reaches_its_next_turn(week_home, tmp_path):
+    """orrery's kept line lands before that turn's reply, so it is not news to the next turn;
+    the state still says the proposal was kept."""
+    with closing(db.open_existing(week_home)) as conn:
+        pid = propose_move(conn).id
+    fake = make_fake(tmp_path, OK, side_effect="helpers:keep_waiting_at")
+    run(week_home, fake, "first")
+    run(week_home, fake, "what now")
+    first, second = (c["stdin"] for c in read_calls(fake))
+    assert f"proposal #{pid} is waiting for the user's y/n" in first
+    assert f"\n\nno proposal waiting; the last, #{pid}, was kept\n\nmemory:" in second
+    said = [t for _, t in _rows(week_home, 5)]
+    assert said == ["first", f"kept proposal #{pid}", "ok", "what now", "ok"]  # kept mid-turn
 
 
 def test_a_resumed_turn_hears_what_orrery_said_since_its_reply(week_home, tmp_path):

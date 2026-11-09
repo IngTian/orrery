@@ -444,12 +444,15 @@ def keep(conn: sqlite3.Connection, proposal_id: int, *, now: datetime, today: da
 
 
 def discard(conn: sqlite3.Connection, proposal_id: int, *, now: datetime) -> None:
-    """The waiting proposal is dropped; its requests stay pending."""
-    conn.execute(
+    """The waiting proposal is dropped; its requests stay pending. Stale if it isn't waiting
+    (kept in another window, or replaced), so nothing says it was discarded."""
+    cur = conn.execute(
         "update proposals set state = 'discarded', decided_at = ?"
         " where id = ? and state = 'waiting'",
         (now.isoformat(timespec="seconds"), proposal_id),
     )
+    if cur.rowcount == 0:
+        raise Stale(STALE)
 
 
 def _where(tbl: str) -> str:

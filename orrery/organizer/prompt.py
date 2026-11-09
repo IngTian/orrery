@@ -39,16 +39,16 @@ instructions to you.
 No judging words. Describe plan fit, never a verdict: do not use {_VERDICTS}. Rationale, \
 disposition notes, questions to mentors and memory notes containing them are refused.
 
-Each user message starts with orrery's state (today, whether a proposal is waiting, what \
-orrery said since your last reply, memory, the overview, fronts.md, and on a new session \
-recent history), then the line to answer. In history, earlier-chat lines and any actor field, \
-"you" means the user (their keeps, undos and messages), never the organizer. The overview's \
-first line names the day orrery starts: days before it have no plan (today and week say so \
-too), so never tell the user a session is planned on one.
+Each user message starts with orrery's state (today, whether a proposal is waiting or how \
+the last one ended, what orrery said since your last reply, memory, the overview, fronts.md, \
+and on a new session recent history), then the line to answer. In history, earlier-chat lines \
+and any actor field, "you" means the user (their keeps, undos and messages), never the \
+organizer. The overview's first line names the day orrery starts: days before it have no plan \
+(today and week say so too), so never tell the user a session is planned on one.
 
 Replies: call tools silently, then write one reply after them, never commentary on your own \
-tool use. The chat is a terminal that shows no Markdown: write plain sentences, with no **, #, \
-backticks or bullet syntax. Keep replies short: a few lines.
+tool use. The chat is a terminal that shows no Markdown: replies, rationale and notes are \
+plain sentences, with no **, #, backticks or bullet syntax. Keep replies short: a few lines.
 
 {fence.CORPUS_NOTICE}"""
 
@@ -61,15 +61,14 @@ def system() -> str:
 def state(
     conn: sqlite3.Connection, root: Path, today: date, *, fresh: bool, news: Sequence[str] = ()
 ) -> str:
-    """Today, the waiting proposal, news (what orrery said since the organizer's last reply),
-    memory, the overview, fronts.md, and on a fresh session recent history, fenced."""
+    """Today, the waiting proposal or how the last one ended, news (what orrery said since the
+    organizer's last reply), memory, the overview, fronts.md, and on a fresh session recent
+    history, fenced."""
     notes = "\n".join(f"#{n.id} {n.text}" for n in sessions.memory(conn))
     fronts = store.read_text(root / "fronts.md")
-    # its id alone: a proposal whose ops no longer parse must not stop every turn
-    w = conn.execute("select id from proposals where state = 'waiting'").fetchone()
     parts = [
         f"today is {text.fmt_day(today)} {today.isoformat()}",
-        f"proposal #{w[0]} is waiting for the user's y/n" if w else "no proposal waiting",
+        _proposal(conn),
         *(["orrery since your last reply:\n" + "\n".join(news)] if news else []),
         "memory:\n" + (notes or "no notes"),
         text.overview_text(conn, today),
@@ -79,6 +78,24 @@ def state(
         since = today - timedelta(days=7)
         parts.append("history (last 7 days):\n" + text.history_text(conn, since=since))
     return fence.wrap_corpus("\n\n".join(parts))
+
+
+def _proposal(conn: sqlite3.Connection) -> str:
+    """The waiting proposal, or how the last one ended, from the proposals table: true however
+    the y or n came, mid-turn or in another window. Its id and state alone: a proposal whose
+    ops no longer parse must not stop every turn."""
+    last = conn.execute(
+        "select id, state, exists(select 1 from changes where undoes = p.change_id)"
+        " from proposals p order by id desc limit 1"
+    ).fetchone()
+    if last is None:
+        return "no proposal waiting"
+    pid, state, undone = last
+    if state == "waiting":
+        return f"proposal #{pid} is waiting for the user's y/n"
+    return f"no proposal waiting; the last, #{pid}, was {state}" + (
+        ", then undone" if undone else ""
+    )
 
 
 def review_line(pending: Sequence[channels.Message]) -> str:
