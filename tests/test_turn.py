@@ -27,7 +27,7 @@ from fake_claude import (
 )
 from helpers import TODAY, propose_move, remember_at
 
-from orrery import db, proposals, store
+from orrery import db, proposals, store, text
 from orrery.ai import fence
 from orrery.organizer import prompt, sessions, turn
 from orrery.organizer.sessions import Session
@@ -90,6 +90,27 @@ def test_system_prompt_says_nothing_is_planned_before_starts():
     p = " ".join(prompt.system().split())
     assert "The overview's first line names the day orrery starts: days before it have no plan" in p
     assert "never tell the user a session is planned on one" in p
+
+
+def test_system_prompt_is_warm_specific_and_points_to_support():
+    """Encouragement names what happened; an unmet plan is the plan's fit, never the user;
+    discouragement gets a line and a lighter option; acute distress stops planning and points
+    to people and a crisis line; a tone preference in memory is followed."""
+    p = " ".join(prompt.system().split())
+    for rule in (
+        "Tone: warm, plain and on the user's side",
+        "Encouragement is specific and true: name what actually happened",
+        "never generic praise; if it can't be pointed to, don't say it",
+        "A session that didn't happen is a plan that didn't fit, never the user falling short",
+        "Follow any tone preference in memory",
+        "When the user sounds discouraged, acknowledge it in a line",
+        "If they voice acute distress or any thought of harming themselves, stop planning",
+        "988, call or text, in the US and Canada; https://findahelpline.com elsewhere",
+        "Never act as therapy",
+    ):
+        assert rule in p, rule
+    tone = p[p.index("Tone:") : p.index("Never act as therapy.")]
+    assert not text.has_verdict(tone), "the tone rules use no verdict word themselves"
 
 
 def test_system_prompt_pins_keeps_plain_text_and_silent_tools():
