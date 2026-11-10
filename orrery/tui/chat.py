@@ -1,29 +1,38 @@
 """The organizer chat, beside every tab: a panel titled Organizer, since when this chat has run
 on the right of its top border, holding every session's transcript (older pages read as you
-scroll up, a divider where each chat began), the reply streaming in, the waiting proposal's
+scroll up, a divider where each chat began), the turn in progress, the waiting proposal's
 diff, the last key's line, and the input.
 
+The transcript reads as messages: yours and the organizer's each its speaker on a line, then
+its text two columns in, wrapped to the panel; orrery's own lines `· <text>`, muted, together
+with no gap; a blank line between the rest. While a turn runs, the organizer's latest words
+show muted after `… ` until its reply replaces them.
+
 From 110 columns it is docked on the right, 30% of the window from 37 to 72 columns wide.
-Narrower it folds to a one-line strip at the bottom, and c opens it over the content until
-esc. Transcript text reaches the screen as plain Content, never parsed as markup; only an
-organizer row's ** pairs are read, as bold spans built by hand.
+Narrower it folds to a one-line strip at the bottom (the newest message's speaker and first
+line), and c opens it over the content until esc. Transcript text reaches the screen as plain
+Content, never parsed as markup; only an organizer row's ** pairs are read, as bold spans built
+by hand.
 """
 
 import re
 from collections.abc import Callable, Sequence
 from datetime import date
+from functools import lru_cache
 
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.content import Content
+from textual.geometry import Size
 from textual.message import Message
+from textual.widget import Widget
 from textual.widgets import Input, Static
 
 from orrery.organizer.sessions import Line
 from orrery.proposals import DiffLine
 from orrery.text import fmt_day
 from orrery.tui import keymap
-from orrery.tui.diff import MUTED, chat_bar, render_diff
+from orrery.tui.diff import INDENT, MUTED, chat_bar, para, render_diff
 from orrery.tui.themes import ThemePicker
 from orrery.tui.views import panel_title
 
@@ -32,7 +41,7 @@ TITLE = "Organizer"
 STARTED = "new chat started"  # every session's first row: shown as its divider
 WAITING = "proposal waiting: c shows it"
 HINT = "press c, then ask orrery to move, add or report a session"
-_STYLE = {"you": "bold", "orrery": MUTED}
+_HEAD = {"you": "bold $text-accent", "organizer": "bold $text-primary"}
 
 
 def _day(at: str) -> str:
@@ -51,26 +60,78 @@ _BOLD = re.compile(rf"(?<![{_WORD}])\*\*(?=[^\s*])(.+?)(?<=[^\s*])\*\*(?![{_WORD
 _STRAY = re.compile(rf"(?<![{_WORD}])\*\*|\*\*(?![{_WORD}])")
 
 
-def _reply(text: str) -> Content:
-    """An organizer row, each **pair**'s span bold and its markers gone; an unpaired ** goes
-    too, but not one inside a word. Spans built by hand: nothing else in the text is read,
-    never as markup."""
+def _bold(text: str) -> Content:
+    """An organizer's text, each **pair**'s span bold and its markers gone; an unpaired **
+    goes too, but not one inside a word. Spans built by hand: nothing else in the text is
+    read, never as markup."""
     parts = _BOLD.split(text)  # plain, bold, plain, ...
-    styled = ((p, "bold") if i % 2 else _STRAY.sub("", p) for i, p in enumerate(parts))
-    return Content.assemble("organizer: ", *styled)
+    return Content.assemble(
+        *((p, "bold") if i % 2 else _STRAY.sub("", p) for i, p in enumerate(parts))
+    )
 
 
-def render_line(line: Line) -> Content:
-    """A transcript row as `<speaker>: <text>`; a chat's first row as its divider."""
+def _dot(line: Line | None) -> bool:
+    """orrery's own line, drawn `· <text>`: not a divider."""
+    return line is not None and line.speaker == "orrery" and not _divider(line)
+
+
+@lru_cache(maxsize=4096)  # each layout measures every row, and a streamed reply lays out often
+def render_line(line: Line, width: int, live: bool = False) -> tuple[Content, ...]:
+    """A transcript row's lines at width: a chat's first row as its divider; orrery's as
+    `· <text>`, muted; yours and the organizer's as the speaker, then the text two columns in
+    (the organizer's ** pairs bold). live: the turn in progress, its latest words muted after
+    `… `. Wrapped lines hang under the text. Theme tokens, so a cached row follows the theme."""
     if _divider(line):
-        return Content.styled(f"── new chat, {_day(line.at)} ──", MUTED)
-    if line.speaker == "organizer":
-        return _reply(line.text)
-    return Content.styled(f"{line.speaker}: {line.text}", _STYLE.get(line.speaker, ""))
+        return (Content.styled(f"── new chat, {_day(line.at)} ──", MUTED),)
+    text = line.text.strip()
+    if line.speaker == "orrery":
+        dot = Content.styled("· ", MUTED)
+        return tuple(para(dot, INDENT, Content.styled(text, MUTED), width))
+    first, body = INDENT, _bold(text) if line.speaker == "organizer" else Content(text)
+    if live:
+        first, body = Content.styled("  … ", MUTED), body.stylize_before(MUTED)
+    head = Content.styled(line.speaker, _HEAD[line.speaker])
+    return (head, *para(first, Content(" " * first.cell_length), body, width))
 
 
-def _row(line: Line) -> Static:
-    return Static(render_line(line), classes="row")
+def summary(line: Line, live: bool = False) -> str:
+    """A row on one line, as the strip shows it: its speaker and its text's first line, with
+    … if more follow; a divider as drawn."""
+    if _divider(line):
+        return render_line(line, 0)[0].plain
+    text = line.text.strip()
+    first, _, more = (_bold(text).plain if line.speaker == "organizer" else text).partition("\n")
+    return f"{line.speaker}: {'… ' if live else ''}{first}{' …' if more else ''}"
+
+
+def _tight(prev: Line | None, line: Line) -> bool:
+    """No blank line above line: the log's first row, or orrery's line after another."""
+    return prev is None or (_dot(prev) and _dot(line))
+
+
+class _Row(Widget):
+    """A transcript row (live: the turn in progress), drawn at its own width, so it wraps to
+    the panel's; a blank line above it unless it's tight."""
+
+    def __init__(self, line: Line, tight: bool = False, live: bool = False, **kw) -> None:
+        super().__init__(classes="row -tight" if tight else "row", **kw)
+        self.line, self.live = line, live
+
+    def get_content_height(self, container: Size, viewport: Size, width: int) -> int:
+        """The lines at the width measured for: on a resize, self.size is still the old one."""
+        return len(render_line(self.line, width, self.live))
+
+    def render(self) -> Content:
+        return Content("\n").join(render_line(self.line, self.size.width, self.live))
+
+
+def _rows(lines: Sequence[Line], prev: Line | None) -> list[_Row]:
+    """A row per line, oldest first, the first after prev (None: at the top)."""
+    out = []
+    for ln in lines:
+        out.append(_Row(ln, _tight(prev, ln)))
+        prev = ln
+    return out
 
 
 class _Proposal(Static):
@@ -90,13 +151,16 @@ class _Proposal(Static):
         if not self.diff:
             self.update("")
             return
-        bar = chat_bar(keymap.footer("proposal"), self.content_size.width)
-        self.update(Content("\n").join([render_diff(list(self.diff)), bar]))
+        w = self.content_size.width
+        if not w:  # not laid out yet: painted on its first resize
+            return
+        bar = chat_bar(keymap.footer("proposal"), w)
+        self.update(Content("\n").join([render_diff(list(self.diff), w), bar]))
 
 
 class _Log(VerticalScroll, can_focus=False):
-    """The transcript, oldest at the top: a Static per row, then the reply streaming in, the
-    hint while nothing but dividers was said, and the waiting proposal. Anchored to the
+    """The transcript, oldest at the top: a _Row per row, then the turn in progress, the hint
+    while nothing but dividers was said, and the waiting proposal. Anchored to the
     bottom; scrolled to the top, it reads the page before and keeps the rows you were reading
     where they were. Rows too few to scroll read the pages before until they fill it."""
 
@@ -105,11 +169,11 @@ class _Log(VerticalScroll, can_focus=False):
         self.older = older  # the page of rows before an id, newest first; None if unreadable
         self.oldest = self.newest = 0  # the ids shown; 0 while none are
         self.more = False  # rows older than oldest may exist
-        self.pending: list[Static] = []  # rows said just now, until the database has them
+        self.pending: list[_Row] = []  # rows said just now, until the database has them
         self.said = False  # a row shown is more than a divider
 
     def compose(self) -> ComposeResult:
-        yield Static(id="live", classes="row", markup=False)
+        yield _Row(Line("", "organizer", ""), live=True, id="live")
         yield Static(Content.styled(HINT, MUTED), id="hint")
         yield _Proposal(id="proposal")
 
@@ -152,7 +216,9 @@ class _Log(VerticalScroll, can_focus=False):
         self.oldest = page[-1].id
         self.heard(page)
         top = self.children[0]
-        await self.mount_all([_row(ln) for ln in reversed(page)], before=0)
+        if isinstance(top, _Row):  # no longer the first: a blank line above it, unless tight
+            top.set_class(_tight(page[0], top.line), "-tight")
+        await self.mount_all(_rows(page[::-1], None), before=0)
 
         def back() -> None:  # laid out by now: the row that was at the top goes back there
             self.scroll_to(y=top.virtual_region.y, animate=False)
@@ -193,8 +259,8 @@ class ChatPanel(Vertical):
         self._older = older
         self._note = ""
         self._live: str | None = None
-        self._last = ""  # the newest row, for the strip
-        self._saved = ""  # the newest row the database has
+        self._last: Line | None = None  # the newest row: the strip's, and the next row's prev
+        self._saved: Line | None = None  # the newest row the database has
         self._since = ""  # the panel's caption: since when the active chat has run
 
     def compose(self) -> ComposeResult:
@@ -212,20 +278,21 @@ class ChatPanel(Vertical):
         self._title()
         log = self.query_one(_Log)
         new = [ln for ln in lines if ln.id > log.newest]
+        prev = self._saved
         if lines and (lines[-1].id < log.newest or (log.newest and len(new) == PAGE)):
             log.query(".row").exclude("#live").remove()
             log.pending.clear()
-            log.newest, log.said, new = 0, False, list(lines)
+            log.newest, log.said, new, prev = 0, False, list(lines), None
         if not new:
             return
         self.drop_pending()
         if not log.newest:
             log.oldest, log.more = new[0].id, len(lines) == PAGE
         log.newest = new[-1].id
-        log.mount_all([_row(ln) for ln in new], before="#live")
+        log.mount_all(_rows(new, prev), before="#live")
         log.heard(new)
         log.call_after_refresh(log.fill)
-        self._last = self._saved = render_line(new[-1]).plain
+        self._last = self._saved = new[-1]
         self._paint_strip()
 
     def on_resize(self) -> None:
@@ -250,20 +317,22 @@ class ChatPanel(Vertical):
     def append(self, line: Line) -> None:
         """A row said just now, shown at the bottom until the database has it."""
         log = self.query_one(_Log)
-        row = _row(line)
+        row = _Row(line, _tight(self._last, line))
         log.pending.append(row)
         log.heard([])
         log.mount(row, before="#live")
         log.scroll_end(animate=False)
-        self._last = render_line(line).plain
+        self._last = line
         self._paint_strip()
 
     def stream(self, text: str | None) -> None:
-        """The reply so far (or the working line), under the transcript; None clears it."""
+        """The organizer's latest words (or the working line), under the transcript; None
+        clears them."""
         self._live = text
-        live = self.query_one("#live", Static)
-        live.update(_reply(text) if text is not None else "")
+        live = self.query_one("#live", _Row)
+        live.line = Line("", "organizer", text or "")
         live.display = text is not None
+        live.refresh(layout=True)
         self._paint_strip()
 
     def note(self, text: str) -> None:
@@ -291,9 +360,9 @@ class ChatPanel(Vertical):
         elif self._note:
             line = self._note
         elif self._live is not None:
-            line = _reply(self._live).plain
+            line = summary(Line("", "organizer", self._live), live=True)
         else:
-            line = self._last
+            line = summary(self._last) if self._last else ""
         self.query_one("#strip", Static).update(line)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:

@@ -137,7 +137,7 @@ Like the Week tab, it is a column of bordered panels: Completion on top, then yo
 
 ### Small windows and reloads
 
-- From 110 columns wide, the chat is docked on the right, 30% of the window wide, from 37 to 72 columns. Narrower, it folds to a one-line strip at the bottom showing its newest line, or `proposal waiting: c shows it` when one is. `c` opens the chat over the content with its input focused; `esc` leaves the input, and `y`/`n` then act on a waiting proposal; a second `esc` closes the chat.
+- From 110 columns wide, the chat is docked on the right, 30% of the window wide, from 37 to 72 columns. Narrower, it folds to a one-line strip at the bottom showing the newest message's speaker and first line (`organizer: Proposal #3 ready. …`), or `proposal waiting: c shows it` when one is. `c` opens the chat over the content with its input focused; `esc` leaves the input, and `y`/`n` then act on a waiting proposal; a second `esc` closes the chat.
 - From 160 columns wide, each tab's lower panels sit side by side under its top panel; narrower, they stack in one column that scrolls. A year's calendar too wide for two columns a day gets one.
 - Below 80 columns or 24 rows, one line says the size orrery needs.
 - The screen reloads when the day changes. Press `r` to reload it by hand.
@@ -307,11 +307,17 @@ When requests are pending, the organizer weighs them together and puts **one com
 
 **Discarding it** (`n`) changes nothing: the requests stay pending.
 
+**One waits at a time.** While a proposal waits, the organizer can't put another to you unless the new one names the waiting one, folding its changes in; orrery says so in the chat (`proposal #4 replaces #3 (#3 was not kept)`), so a proposal never vanishes unseen.
+
+**One that can't apply any more expires**, such as one about a day now past. orrery checks each time it reads the week, such as when it opens, at the day boundary and after a `y` that can't keep it; it says so in the chat (`proposal #3 can't apply any more: past days keep their plan; its requests stay pending — ask the organizer for a new one`), and the diff goes. Nothing in the schedule changes, and its requests stay pending. One that would still apply never expires.
+
 **Undo** (`u`) is a new compensating change; it never deletes history. It works newest first and survives a restart. Undoing a kept proposal sets requests back to pending and posts a `reversed` outcome to each mentor.
 
 ## The organizer
 
-The chat sits on the right of every tab, a panel titled `Organizer` with when this chat began on the right of its top border. It holds the transcript of every chat so far (scroll up for older ones; a `── new chat, <date> ──` line marks where each began), a waiting proposal's diff with its `y keep · n discard` line, and the input at the bottom, `› message orrery` while it's empty. Press `c` to move to the input, type your message and press `enter` to send it to the organizer; its reply streams in above the input, as plain text (a `**bold**` span shows in bold). Press `esc` to cancel a turn while it runs, or else to leave the input.
+The chat sits on the right of every tab, a panel titled `Organizer` with when this chat began on the right of its top border. It holds the transcript of every chat so far (scroll up for older ones; a `── new chat, <date> ──` line marks where each began), a waiting proposal's diff with its `y keep · n discard` line, and the input at the bottom, `› message orrery` while it's empty. Press `c` to move to the input, type your message and press `enter` to send it to the organizer. Press `esc` to cancel a turn while it runs, or else to leave the input.
+
+The transcript reads as messages, a blank line apart: `you` or `organizer` on a line of its own, then the message indented under it, wrapped to the panel's width. The organizer writes plain text (a `**bold**` span shows in bold). orrery's own lines (`· kept proposal #3`) are muted, grouped with no gap between them; when one says what happened, such as a keep, a discard or an expiry, no note under the input repeats it. While a turn runs, the organizer's latest words show muted after `…` (what it's looking at between tool calls); when it ends, its reply takes their place, and only that reply is kept in the transcript.
 
 The diff's changed lines name the requests behind them by number, e.g. `(request #12)`; each request's text is quoted once, under the proposal's rationale.
 
@@ -325,13 +331,13 @@ Each message you send is one turn; several rounds of back and forth make one cha
 
 The organizer:
 - Reads the schedule (tools: `overview`, `history`, `today`, `week`, `channel`, `requests`)
-- Proposes changes: `propose(operations, rationale, dispositions)` puts one combined proposal to you
+- Proposes changes: `propose(operations, rationale, dispositions, replaces)` puts one combined proposal to you; while one waits, a new one must name it in `replaces`
 - Asks mentors questions: `ask(subject, question)`
 - Remembers preferences: `memory` lists notes; `remember(note)` adds one; `forget(note_id)` drops one
 
 **Memory** records only what you say or confirm, such as a preference. It does not record what was done when; the database keeps that history. To drop a memory note, press `M` to see the list with its `#id`, then ask the organizer to forget that id.
 
-The organizer cannot change the plan directly: only your `y` keeps a proposal. When you keep, discard or undo one, orrery says so in the chat (`kept proposal #3`). The organizer's next turn starts with whether a proposal is waiting or how the last one ended (`the last, #3, was kept`), read from the proposals themselves, so it never has to guess, even when you answered while it was still replying or in another window.
+The organizer cannot change the plan directly: only your `y` keeps a proposal. When you keep, discard or undo one, orrery says so in the chat (`kept proposal #3`). The organizer's next turn starts with whether a proposal is waiting or how the last one ended (`the last, #3, was kept`, or `the last, #3, expired: past days keep their plan`), read from the proposals themselves, so it never has to guess, even when you answered while it was still replying or in another window.
 
 ### New chat
 
@@ -339,7 +345,7 @@ Press `x` to end this organizer session and start a new one. A confirm dialog as
 
 ### Morning review
 
-At the first open each day, if mentor requests are pending, the organizer runs a morning review: it reads the pending requests, weighs them together with the week, and proposes one plan. If a proposal is already waiting, the review waits until you keep or discard it. A request that comes in later in the day waits for the next day, or you can ask the organizer to look at it.
+At the first open each day, if mentor requests are pending, the organizer runs a morning review: it reads the pending requests, weighs them together with the week, and proposes one plan. If a proposal is already waiting, the review waits until you keep or discard it, or it expires. A request that comes in later in the day waits for the next day, or you can ask the organizer to look at it.
 
 ### Organizer tools (MCP server)
 
@@ -353,7 +359,7 @@ Read tools:
 - `memory()`: list all memory notes
 
 Write tools:
-- `propose(operations, rationale, dispositions)`: propose schedule changes with request dispositions
+- `propose(operations, rationale, dispositions, replaces)`: propose schedule changes with request dispositions; `replaces` names the waiting proposal it replaces
 - `ask(subject, question)`: ask a mentor a question
 - `remember(note)`: remember a note
 - `forget(note_id)`: forget a memory note by id

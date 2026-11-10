@@ -57,7 +57,7 @@ async def test_one_review_per_day(week_home, tmp_path):
         await _until(pilot, _organizer_done)
         await settle(pilot, app)
         assert len(read_calls(fake)) == 1
-        assert "Morning review: 1 pending request from math." in read_calls(fake)[0]["stdin"]
+        assert "morning review: 1 pending request (math)" in read_calls(fake)[0]["stdin"]
         assert _last_review(week_home) == TODAY.isoformat()
         # Exactly one review change with history
         with closing(db.open_existing(week_home)) as conn:
@@ -125,7 +125,7 @@ async def test_late_request_is_reviewed_next_morning(week_home, tmp_path):
         await _until(pilot, lambda: read_calls(fake) and _organizer_done())
         await settle(pilot, app)
         (call,) = read_calls(fake)
-        assert "Morning review: 1 pending request from math." in call["stdin"]
+        assert "morning review: 1 pending request (math)" in call["stdin"]
         assert _last_review(week_home) == (TODAY + timedelta(days=1)).isoformat()
 
 
@@ -149,7 +149,7 @@ async def test_no_review_while_proposal_waiting(week_home, tmp_path):
         await _until(pilot, _organizer_done)
         await settle(pilot, app)
         assert len(read_calls(fake)) == 1  # now the review runs
-        assert "Morning review: 1 pending request from math." in read_calls(fake)[0]["stdin"]
+        assert "morning review: 1 pending request (math)" in read_calls(fake)[0]["stdin"]
 
 
 async def test_new_request_after_review_starts_no_turn(week_home, tmp_path):
@@ -200,7 +200,7 @@ async def test_two_apps_start_one_review(week_home, tmp_path):
                 assert cnt == 1
             # Exactly one review turn
             calls = read_calls(fake)
-            review_calls = [c for c in calls if "Morning review:" in c["stdin"]]
+            review_calls = [c for c in calls if "morning review:" in c["stdin"]]
             assert len(review_calls) == 1
             # Neither app shows BUSY in note
             assert "busy" not in _text(app1, "#note").lower()
@@ -208,18 +208,16 @@ async def test_two_apps_start_one_review(week_home, tmp_path):
 
 
 async def test_review_line_text_exact(week_home):
-    """The review line format is exact."""
+    """The review line is a fact, its count and channels: the transcript shows it, and the
+    instruction it carries is the system prompt's, never the owner's to read."""
     # One request
     pending = [
         channels.Message(
             1, "math", "request", "mentor:math", {}, "more learn", None, "r1", "pending", ""
         )
     ]
-    expected = (
-        "Morning review: 1 pending request from math. "
-        "Weigh them together with the week and propose one plan."
-    )
-    assert prompt.review_line(pending) == expected
+    assert prompt.review_line(pending) == "morning review: 1 pending request (math)"
+    assert "When orrery's line is the morning review" in prompt.system()
     # Multiple requests from different channels
     pending = [
         channels.Message(
@@ -232,11 +230,7 @@ async def test_review_line_text_exact(week_home):
             3, "math", "request", "mentor:math", {}, "even more", None, "r3", "pending", ""
         ),
     ]
-    expected = (
-        "Morning review: 3 pending requests from finance, math. "
-        "Weigh them together with the week and propose one plan."
-    )
-    assert prompt.review_line(pending) == expected
+    assert prompt.review_line(pending) == "morning review: 3 pending requests (finance, math)"
 
 
 async def test_claim_review_direct(week_home):

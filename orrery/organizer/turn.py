@@ -1,6 +1,7 @@
 """One organizer turn: a `claude -p` subprocess resuming the session, streamed as stream-json."""
 
 import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -47,9 +48,13 @@ def _kill(proc: subprocess.Popen) -> None:
 
 @dataclass(frozen=True)
 class TurnResult:
+    """The reply, whether the turn answered, orrery's line about it if any, and whether the
+    transcript has that line (else only a note can say it)."""
+
     text: str
     ok: bool
     line: str | None
+    recorded: bool = False
 
 
 def argv(settings: Settings, claude: str, s: sessions.Session, mcp_file: Path) -> list[str]:
@@ -120,6 +125,7 @@ def run_turn(
                 r = TurnResult("", False, FAILED)
             if not r.ok:
                 sessions.say(conn, s.id, "orrery", r.line, now())
+                r = dataclasses.replace(r, recorded=True)
             return r
     except Exception:
         log.exception("organizer turn failed")
@@ -173,7 +179,7 @@ def _turn(
     if restored:
         sessions.say(conn, s.id, "orrery", RESTORED, now())
     sessions.say(conn, s.id, "organizer", reply, now())
-    return TurnResult(reply, True, RESTORED if restored else None)
+    return TurnResult(reply, True, RESTORED if restored else None, recorded=restored)
 
 
 def _attempt(
@@ -186,12 +192,15 @@ def _attempt(
     cancel: threading.Event,
     deadline: float,
 ) -> tuple[str, str | None]:
-    """Run one subprocess; returns (reply, None) if ok, else ("", the problem)."""
+    """Run one subprocess; returns (reply, None) if ok, else ("", the problem). The reply is
+    the final message's text (the result's), or, if it has none, the last streamed text block
+    that says anything, so the commentary between tool calls goes; on_text hears each text
+    block as it streams, afresh."""
     stopped: list[str] = []  # set by the watchdog
     refused = None  # set at init
     init_seen = False
     r: dict = {}
-    acc = ""
+    block = last = ""  # the text block streaming, and the last one with any text
     with (
         tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as err,
         subprocess.Popen(
@@ -243,17 +252,15 @@ def _attempt(
                         break
                 elif ev.get("type") == "stream_event":
                     e = ev.get("event") or {}
-                    block = e.get("content_block") or {}
-                    if (
-                        e.get("type") == "content_block_start"
-                        and acc
-                        and block.get("type") == "text"
-                    ):
-                        acc += "\n"
+                    started = (e.get("content_block") or {}).get("type")
+                    if e.get("type") == "content_block_start" and started == "text":
+                        block = ""
                     d = e.get("delta") or {}
                     if d.get("type") == "text_delta":
-                        acc += d.get("text", "")
-                        on_text(acc)
+                        block += d.get("text", "")
+                        if block.strip():
+                            last = block
+                            on_text(block)
                 elif ev.get("type") == "result":
                     r = ev
         except BaseException:
@@ -271,7 +278,9 @@ def _attempt(
     if init_seen and r.get("is_error") is False:
         if r.get("permission_denials"):
             return "", NO_TOOLS
-        return acc or r.get("result") or "", None  # result is only the last text block
+        # result: the final message's text; last covers a final message with none
+        res = str(r.get("result") or "")
+        return (res if res.strip() else last), None
     errors = map(str, r.get("errors") or [])
     said = " ".join([str(r.get("result") or ""), *errors]).lower()
     stderr_text = raw_err.lower()

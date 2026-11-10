@@ -34,7 +34,7 @@ from orrery.tui import app as tui_app
 from orrery.tui import chat as tui_chat
 from orrery.tui import keymap
 from orrery.tui.app import OrreryApp
-from orrery.tui.chat import PAGE, ChatInput, ChatPanel
+from orrery.tui.chat import PAGE, ChatInput, ChatPanel, summary
 from orrery.tui.diff import chat_bar, render_diff
 from orrery.tui.views import Confirm, Popup
 from orrery.tui.week import WeekView
@@ -314,7 +314,8 @@ async def test_y_n_act_on_shown_proposal_when_input_not_focused(week_home):
         await leave_chat(pilot, app, "tab", "y")
         await settle(pilot, app)
         assert app.query_one("#tabs", ContentSwitcher).current == "report"
-        assert _text(app, "#note") == "kept" and not app.query_one("#proposal").display
+        assert not app.query_one("#proposal").display
+        assert _talk(app)[-1] == f"orrery: kept proposal #{p.id}"
     with closing(db.open_existing(week_home)) as conn:
         assert state_of(conn, p.id) == "kept"
 
@@ -350,7 +351,8 @@ async def test_scrollback_loads_older_sessions_with_dividers(week_home):
         talk = _talk(app)
         assert talk[0] == "── new chat, Tue 11/10 ──"
         assert talk[1:3] == ["you: chat 0 line 0", "you: chat 0 line 1"]
-        assert log.scroll_y == top.virtual_region.y == 66, "the rows read before moved"
+        # the divider, then 65 two-line messages a blank line apart, and the one above top
+        assert log.scroll_y == top.virtual_region.y == 1 + 65 * 3 + 1, "the rows read moved"
         log.scroll_to(y=0, animate=False)  # nothing older is left
         await settle(pilot, app)
         assert len(_talk(app)) == 166
@@ -388,7 +390,7 @@ async def test_scrollback_fills_a_log_the_first_page_leaves_short(week_home):
     read until the log can scroll or none is left."""
     _three_sessions(week_home)
     app = _app(week_home)
-    async with app.run_test(size=(120, 130)) as pilot:
+    async with app.run_test(size=(120, 400)) as pilot:  # a page of messages is ~300 lines
         await settle(pilot, app)
         await _until(pilot, lambda: len(_talk(app)) == 166)
         assert _talk(app)[0] == "── new chat, Tue 11/10 ──"
@@ -399,18 +401,18 @@ async def test_a_hidden_log_reads_one_page_until_it_shows(week_home, monkeypatch
     """Folded to the strip the log is never laid out, so it has nothing to fill and
     reads only the newest page; once c shows it, it reads the pages before as it needs."""
     for module in (tui_app, tui_chat):
-        monkeypatch.setattr(module, "PAGE", 10)
+        monkeypatch.setattr(module, "PAGE", 5)  # 5 messages: shorter than the opened log
     _three_sessions(week_home)
     app = _app(week_home)
     async with app.run_test(size=NARROW) as pilot:
         await settle(pilot, app)
         for _ in range(10):  # a read the hidden log asked for would have landed by now
             await pilot.pause(0.01)
-        assert len(_talk(app)) == 10
+        assert len(_talk(app)) == 5
         await pilot.press("c")
         log = app.query_one("#log")
         await _until(pilot, lambda: log.max_scroll_y > 0)
-        assert 10 < len(_talk(app)) < 166
+        assert 5 < len(_talk(app)) < 166
 
 
 async def test_header_and_the_hint_while_nothing_was_said(week_home):
@@ -548,7 +550,7 @@ async def test_narrow_strip_says_proposal_waiting_and_y_does_nothing_until_overl
         assert app.focused is app.query_one(WeekView) and chat.has_class("-overlay")
         await pilot.press("y")
         await settle(pilot, app)
-        assert _text(app, "#note") == "kept"
+        assert not app.query_one("#proposal").display and not app.query_one("#note").display
         await pilot.press("escape")
         await pilot.pause()
         assert not chat.has_class("-overlay") and chat.region.height == 1
@@ -626,15 +628,15 @@ async def test_resize_mid_turn_keeps_stream(week_home, tmp_path):
     async with app.run_test(size=WIDE) as pilot:
         await settle(pilot, app)
         await chat_keys(pilot, app, *"first", "enter")
-        await _until(pilot, lambda: "organizer: Let me look." in _talk(app))
+        await _until(pilot, lambda: "organizer: … Let me look." in _talk(app))
         chat, line = app.query_one(ChatPanel), app.query_one(ChatInput)
         app.set_focus(None)  # out of the input, as a click elsewhere leaves it
         await pilot.resize_terminal(*NARROW)  # the screen hears of it a timer's tick later
         await _until(pilot, lambda: chat.region.height == 1)
-        assert _text(app, "#strip") == "organizer: Let me look."
+        assert _text(app, "#strip") == "organizer: … Let me look."
         await pilot.resize_terminal(*WIDE)
         await _until(pilot, lambda: app.screen.has_class("-wide"))
-        assert _talk(app)[-2:] == ["you: first", "organizer: Let me look."]
+        assert _talk(app)[-2:] == ["you: first", "organizer: … Let me look."]
         await pilot.press("c")
         await pilot.resize_terminal(*NARROW)  # typing as it folds: it opens over the content
         await _until(pilot, lambda: app.screen.has_class("-narrow") and chat.region.height > 1)
@@ -642,7 +644,7 @@ async def test_resize_mid_turn_keeps_stream(week_home, tmp_path):
         await pilot.press("u", "q")
         await pilot.pause()
         assert line.value == "uq" and app.is_running, "a letter fired the app's key"
-        assert _talk(app)[-2:] == ["you: first", "organizer: Let me look."]
+        assert _talk(app)[-2:] == ["you: first", "organizer: … Let me look."]
         assert app.turn_cancel is not None
         await pilot.press("escape")
         await _until(pilot, lambda: _organizer_done(app))
@@ -673,7 +675,7 @@ class _Plain(App):
 
     def compose(self) -> ComposeResult:
         yield Static(Content("\n").join(keymap.key_rows("week", 78)), id="footer")
-        yield Static(render_diff(self.diff), id="diff")
+        yield Static(render_diff(self.diff, 78), id="diff")
         yield Static(chat_bar(keymap.footer("proposal"), 30), id="bar")
 
 
@@ -715,9 +717,32 @@ async def test_muted_rows_are_dimmer_than_the_foreground(week_home, theme):
         _assert_muted(diff, _line_with(diff, "a reason"))
         _assert_muted(diff, _line_with(diff, "− Thu 11/12"))
         rows = list(app.query("#log > .row"))
-        divider, said = (next(w for w in rows if t in str(w.content)) for t in ("──", "review"))
+        divider, said = (next(w for w in rows if t in summary(w.line)) for t in ("──", "review"))
         _assert_muted(divider, divider.render_line(0))
         _assert_muted(said, said.render_line(0))
+
+
+@pytest.mark.parametrize("theme", ["gruvbox", "catppuccin-latte"])
+async def test_speakers_in_their_colours_and_the_turn_in_progress_muted(week_home, tmp_path, theme):
+    """you in the accent's text colour and the organizer in the primary's, both bold; your
+    words in the foreground, not bold; the organizer's words while it works muted."""
+    fake = make_fake(tmp_path, {"events": [INIT_OK, delta("Reading.")], "linger": 30})
+    app = _app(week_home, fake)
+    async with app.run_test(size=WIDE) as pilot:
+        app.theme = theme
+        await settle(pilot, app)
+        await chat_keys(pilot, app, *"hello", "enter")
+        await _until(pilot, lambda: "organizer: … Reading." in _talk(app))
+        you, live = app.query("#log > .row")[-2], app.query_one("#live")
+        for w, token in ((you, "text-accent"), (live, "text-primary")):
+            (head,) = [s for s in w.render_line(0) if s.text.strip()]
+            assert head.style.color.triplet == _rgb(app, token) and head.style.bold
+        words = [s for s in you.render_line(1) if s.text.strip()]
+        assert {s.style.color.triplet for s in words} == {_rgb(app, "foreground")}
+        assert not any(s.style.bold for s in words)
+        _assert_muted(live, live.render_line(1))
+        await pilot.press("escape")
+        await _until(pilot, lambda: _organizer_done(app))
 
 
 async def test_footer_confirm_and_diff_render_without_a_rich_theme_under_textual_light(week_db):

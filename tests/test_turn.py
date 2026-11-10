@@ -6,6 +6,7 @@ import threading
 import time
 from contextlib import closing
 from dataclasses import replace
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -77,7 +78,10 @@ def test_system_prompt_shape():
     p = prompt.system()
     assert not p.startswith("-") and p.endswith(fence.CORPUS_NOTICE)
     assert all(w in p for w in VERDICT_WORDS)
-    for name in ("propose(operations, rationale, dispositions)", "ask(subject, question)"):
+    for name in (
+        "propose(operations, rationale, dispositions, replaces)",
+        "ask(subject, question)",
+    ):
         assert name in p
 
 
@@ -102,6 +106,10 @@ def test_system_prompt_pins_keeps_plain_text_and_silent_tools():
         " sentences, with no **, #, backticks or bullet syntax",
         "call tools silently, then write one reply after them, never commentary on your own"
         " tool use",
+        "To change a waiting one, fold its changes into a new proposal that passes"
+        " replaces=<its id>",
+        "Replies are 2–4 short lines unless the user asks for detail",
+        "don't list every request unless they ask",
     ):
         assert rule in p, rule
 
@@ -134,6 +142,16 @@ def test_state_says_how_the_last_proposal_ended(week_home, tmp_path):
     assert f"\n\nno proposal waiting; the last, #{dropped}, was discarded\n\nmemory:" in a
     assert f"\n\nno proposal waiting; the last, #{kept}, was kept\n\nmemory:" in b
     assert f"\n\nno proposal waiting; the last, #{kept}, was kept, then undone\n\nmemory:" in c
+
+
+def test_state_says_the_last_proposal_expired_and_why(week_home):
+    with closing(db.open_existing(week_home)) as conn:
+        pid = propose_move(conn).id
+        fri = TODAY + timedelta(days=1)
+        proposals.expire(conn, now=datetime(2026, 11, 13, 6), today=fri)
+        got = prompt.state(conn, week_home, fri, fresh=False)
+    line = f"no proposal waiting; the last, #{pid}, expired: past days keep their plan"
+    assert f"\n\n{line}\n\nmemory:" in got
 
 
 def test_a_keep_while_the_organizer_answers_reaches_its_next_turn(week_home, tmp_path):
@@ -196,7 +214,7 @@ def test_failed_turn_logs_stderr_only(week_home, tmp_path, caplog):
     fake = make_fake(tmp_path, {"events": [], "exit": 1, "stderr": "x" * 600 + "boom-auth\n"})
     with caplog.at_level("WARNING", logger="orrery.organizer.turn"):
         r = run(week_home, fake, "hi")
-    assert r == turn.TurnResult("", False, turn.FAILED)
+    assert r == turn.TurnResult("", False, turn.FAILED, recorded=True)
     assert any("boom-auth" in rec.getMessage() for rec in caplog.records)
     assert all(len(rec.getMessage()) < 600 for rec in caplog.records)  # the tail only
     assert "boom-auth" not in " ".join(t for _, t in _rows(week_home, 2))
@@ -215,27 +233,55 @@ def test_streams_and_records_transcript(week_home, tmp_path):
     assert r == turn.TurnResult("Moved.", True, None)
 
 
-def test_new_block_starts_a_new_line(week_home, tmp_path):
-    seen = []
-    events = [INIT_OK, block_start(), delta("A"), block_start(), delta("B"), result_ok("B")]
-    run(week_home, make_fake(tmp_path, {"events": events}), "hi", on_text=seen.append)
-    assert seen == ["A", "A\nB"]
-
-
-def test_only_text_blocks_start_a_new_line(week_home, tmp_path):
+def test_on_text_is_the_latest_text_block(week_home, tmp_path):
+    """The live line shows what the organizer says now: each text block afresh, never the
+    commentary before it; a thinking or tool_use block starts no text."""
     seen = []
     events = [INIT_OK, block_start(), delta("A"), block_start("thinking"),
               block_start("tool_use"), block_start(), delta("B"), result_ok("B")]  # fmt: skip
     run(week_home, make_fake(tmp_path, {"events": events}), "hi", on_text=seen.append)
-    assert seen == ["A", "A\nB"]
+    assert seen == ["A", "B"]
 
 
-def test_records_every_text_block_not_only_the_last(week_home, tmp_path):
-    events = [INIT_OK, block_start(), delta("A"), block_start("tool_use"), block_start(),
-              delta("B"), result_ok("B")]  # fmt: skip
-    r = run(week_home, make_fake(tmp_path, {"events": events}), "hi")
-    assert r == turn.TurnResult("A\nB", True, None)
-    assert _rows(week_home, 1) == [("organizer", "A\nB")]
+@pytest.mark.parametrize(
+    ("events", "reply"),
+    [
+        ([block_start(), delta("A"), block_start("tool_use"), block_start(), delta("B")], "B"),
+        ([block_start(), delta("A"), block_start("tool_use")], "A"),
+        ([block_start("tool_use"), block_start(), delta("B")], "B"),
+        ([block_start(), delta("A")], "A"),
+        ([block_start(), delta("A"), block_start("tool_use"), block_start(), delta("\n")], "A"),
+    ],
+    ids=["text-tool-text", "text-tool", "tool-text", "text", "text-tool-blank"],
+)
+def test_records_only_the_final_text_block(week_home, tmp_path, events, reply):
+    """The reply is the last text block: the commentary before a tool call is dropped, and a
+    turn ending on a tool call (or a blank block) keeps the text before it."""
+    fake = make_fake(tmp_path, {"events": [INIT_OK, *events, result_ok("")]})
+    r = run(week_home, fake, "hi")
+    assert r == turn.TurnResult(reply, True, None)
+    assert _rows(week_home, 2) == [("you", "hi"), ("organizer", reply)]
+
+
+_FINAL = {"type": "assistant", "message": {"content": [{"type": "text", "text": "B"}]}}
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [block_start(), delta("A"), block_start("tool_use")],
+        [block_start(), delta("A"), block_start("tool_use"), _FINAL],
+        [block_start(), delta("A"), block_start("tool_use"), block_start(), delta("partial")],
+    ],
+    ids=["no-deltas", "assistant-event-only", "cut-off-block"],
+)
+def test_reply_is_the_results_text(week_home, tmp_path, events):
+    """The result's text is the final message's: it wins over the streamed block, which may
+    be the commentary before a final message that streamed no deltas, or a block cut off."""
+    fake = make_fake(tmp_path, {"events": [INIT_OK, *events, result_ok("B")]})
+    r = run(week_home, fake, "hi")
+    assert r == turn.TurnResult("B", True, None)
+    assert _rows(week_home, 2) == [("you", "hi"), ("organizer", "B")]
 
 
 def test_non_json_lines_are_skipped(week_home, tmp_path):
@@ -269,7 +315,7 @@ def test_mcp_not_connected_stops_turn(week_home, tmp_path):
     seen = []
     fake = make_fake(tmp_path, {"events": [INIT_FAILED, delta("x"), result_ok("x")]})
     r = run(week_home, fake, "hi", on_text=seen.append)
-    assert r == turn.TurnResult("", False, turn.NO_TOOLS)
+    assert r == turn.TurnResult("", False, turn.NO_TOOLS, recorded=True)
     assert seen == []
     assert _rows(week_home, 2) == [("you", "hi"), ("orrery", turn.NO_TOOLS)]
     assert "organizer" not in [sp for sp, _ in _rows(week_home, 100)]
@@ -325,7 +371,7 @@ def test_resume_failure_reseeds_once(week_home, tmp_path):
         tmp_path, resume_missing(s.claude_id), {"events": [INIT_OK, result_ok("Back.")]}
     )
     r = run(week_home, fake, "hi")
-    assert r == turn.TurnResult("Back.", True, turn.RESTORED)
+    assert r == turn.TurnResult("Back.", True, turn.RESTORED, recorded=True)
     now = _active(week_home)
     assert now.id == s.id and now.claude_id != s.claude_id and now.claude_live
     first, second = read_calls(fake)
@@ -340,7 +386,7 @@ def test_resume_failure_reseeds_once(week_home, tmp_path):
 
     again = make_fake(tmp_path, resume_missing(now.claude_id))
     r = run(week_home, again, "hi again")
-    assert r == turn.TurnResult("", False, turn.FAILED)
+    assert r == turn.TurnResult("", False, turn.FAILED, recorded=True)
     assert len(read_calls(again)) == 2
     assert _rows(week_home, 2) == [("you", "hi again"), ("orrery", turn.FAILED)]
 
@@ -350,14 +396,15 @@ def test_session_id_in_use_reseeds_once(week_home, tmp_path, caplog):
     msg = "Error: Session ID 41b148be-30a9-4de1-b8c4-ab947607fc88 is already in use.\n"
     in_use = {"exit": 1, "stderr": msg}
     never = make_fake(tmp_path, in_use)
-    assert run(week_home, never, "hi") == turn.TurnResult("", False, turn.FAILED)
+    assert run(week_home, never, "hi") == turn.TurnResult("", False, turn.FAILED, recorded=True)
     assert len(read_calls(never)) == 2  # one retry, never a loop
     assert _rows(week_home, 2) == [("you", "hi"), ("orrery", turn.FAILED)]
     assert any("reseeded" in r.getMessage() for r in caplog.records), "the give-up is logged"
 
     s = _active(week_home)
     fake = make_fake(tmp_path, in_use, OK)
-    assert run(week_home, fake, "again") == turn.TurnResult("ok", True, turn.RESTORED)
+    again = run(week_home, fake, "again")
+    assert again == turn.TurnResult("ok", True, turn.RESTORED, recorded=True)
     first, second = (c["argv"][-4:-2] for c in read_calls(fake))
     now = _active(week_home)
     assert first == ["--session-id", s.claude_id] and second == ["--session-id", now.claude_id]
@@ -388,7 +435,7 @@ def test_connected_without_organizer_tools_is_no_tools(week_home, tmp_path):
     seen = []
     fake = make_fake(tmp_path, {"events": [{**INIT_OK, "tools": []}, delta("x"), result_ok("x")]})
     r = run(week_home, fake, "hi", on_text=seen.append)
-    assert r == turn.TurnResult("", False, turn.NO_TOOLS) and seen == []
+    assert r == turn.TurnResult("", False, turn.NO_TOOLS, recorded=True) and seen == []
     assert _rows(week_home, 2) == [("you", "hi"), ("orrery", turn.NO_TOOLS)]
 
 
@@ -448,7 +495,7 @@ def test_second_window_is_busy(week_home, tmp_path):
     finally:
         release.set()
         t.join(5)
-    assert r == turn.TurnResult("", False, turn.BUSY)
+    assert r == turn.TurnResult("", False, turn.BUSY)  # not recorded: the note says it
     assert read_calls(fake) == []
     with closing(db.open_existing(week_home)) as conn:
         assert conn.execute("select count(*) from transcript").fetchone()[0] == 0
@@ -479,7 +526,8 @@ def test_on_text_error_kills_and_records(week_home, tmp_path):
     fake = make_fake(tmp_path, {"events": [INIT_OK, delta("A"), result_ok("A")], "linger": 30})
     t0 = time.monotonic()
     r = run(week_home, fake, "hi", on_text=boom)
-    assert r == turn.TurnResult("", False, turn.FAILED) and time.monotonic() - t0 < 2
+    assert r == turn.TurnResult("", False, turn.FAILED, recorded=True)
+    assert time.monotonic() - t0 < 2
     assert _rows(week_home, 2) == [("you", "hi"), ("orrery", turn.FAILED)]
     with store.file_lock("organizer", blocking=False):  # released
         pass
@@ -496,7 +544,7 @@ def test_cancel_kills_turn(week_home, tmp_path):
 
 def test_bad_claude_path_is_failed(week_home, tmp_path):
     r = run(week_home, tmp_path / "nope", "hi")
-    assert r == turn.TurnResult("", False, turn.FAILED)
+    assert r == turn.TurnResult("", False, turn.FAILED, recorded=True)
     assert _rows(week_home, 2) == [("you", "hi"), ("orrery", turn.FAILED)]
 
 

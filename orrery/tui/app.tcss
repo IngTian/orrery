@@ -216,6 +216,18 @@ Screen.-narrow #chat.-overlay #chat-body {
     padding: 0 1;
 }
 
+/* The transcript's rows, each drawn at the log's width: a blank line between messages, none
+   above the first or between orrery's own lines (-tight). */
+#log .row {
+    width: 1fr;
+    height: auto;
+    margin-top: 1;
+}
+
+#log .row.-tight {
+    margin-top: 0;
+}
+
 #live, #note, #hint {
     display: none;
 }

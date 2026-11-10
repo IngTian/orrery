@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 from pathlib import Path
 
-from orrery import channels, store, text
+from orrery import channels, proposals, store, text
 from orrery.ai import fence
 from orrery.organizer import sessions
 
@@ -22,14 +22,17 @@ in orrery; you have no tool for either. Never say a proposal was kept, applied o
 unless the state or an orrery line says so. A bare y or n the user writes while a proposal \
 waits is orrery's to handle; if they write anything else that means it, such as "keep it", \
 tell them to press y (or type y). While a proposal waits, ask no yes/no question: the user's \
-bare y or n answers the proposal, not you. Your tools: overview, \
-history, requests, today, week and channel to read; propose(operations, rationale, \
-dispositions) to put one change to the user; ask(subject, question) to ask a mentor; \
-remember(note) and forget(note_id) for memory. A new subject or kind must be kept before a \
-proposal can plan it, so propose it on its own first.
+bare y or n answers the proposal, not you. One proposal waits at a time. To change a waiting \
+one, fold its changes into a new proposal that passes replaces=<its id> (orrery tells the user \
+it replaced the old one, which is never kept); otherwise wait for the user's y or n. Your \
+tools: overview, history, requests, today, week and channel to read; propose(operations, \
+rationale, dispositions, replaces) to put one change to the user; ask(subject, question) to ask \
+a mentor; remember(note) and forget(note_id) for memory. A new subject or kind must be kept \
+before a proposal can plan it, so propose it on its own first.
 
 Requests: weigh all pending requests together, never one at a time. Label each one grant, \
-partial, decline or defer in the dispositions, and say in the rationale what was given up.
+partial, decline or defer in the dispositions, and say in the rationale what was given up. \
+When orrery's line is the morning review, weigh them with the week and propose one plan.
 
 Memory: remember only what the user says or confirms, such as a preference. Never remember \
 what was done when; the database records that.
@@ -49,7 +52,8 @@ organizer. The overview's first line names the day orrery starts: days before it
 
 Replies: call tools silently, then write one reply after them, never commentary on your own \
 tool use. The chat is a terminal that shows no Markdown: replies, rationale and notes are \
-plain sentences, with no **, #, backticks or bullet syntax. Keep replies short: a few lines.
+plain sentences, with no **, #, backticks or bullet syntax. Replies are 2–4 short lines unless \
+the user asks for detail; don't list every request unless they ask.
 
 {fence.CORPUS_NOTICE}"""
 
@@ -84,26 +88,19 @@ def state(
 def _proposal(conn: sqlite3.Connection) -> str:
     """The waiting proposal, or how the last one ended, from the proposals table: true however
     the y or n came, mid-turn or in another window. Its id and state alone: a proposal whose
-    ops no longer parse must not stop every turn."""
-    last = conn.execute(
-        "select id, state, exists(select 1 from changes where undoes = p.change_id)"
-        " from proposals p order by id desc limit 1"
-    ).fetchone()
+    ops no longer parse must not stop every turn. One that expired says why."""
+    last = conn.execute("select max(id) from proposals").fetchone()[0]
     if last is None:
         return "no proposal waiting"
-    pid, state, undone = last
-    if state == "waiting":
-        return f"proposal #{pid} is waiting for the user's y/n"
-    return f"no proposal waiting; the last, #{pid}, was {state}" + (
-        ", then undone" if undone else ""
-    )
+    how = proposals.ended(conn, last)
+    if how is None:
+        return f"proposal #{last} is waiting for the user's y/n"
+    return f"no proposal waiting; the last, #{last}, {how}"
 
 
 def review_line(pending: Sequence[channels.Message]) -> str:
-    """The organizer's morning review line, listing pending requests."""
+    """orrery's morning review line: the pending requests' count and channels, a fact for the
+    transcript; what to do with it is the system prompt's."""
     n = len(pending)
     ch = ", ".join(sorted({m.channel for m in pending}))
-    return (
-        f"Morning review: {n} pending request{'s' if n > 1 else ''} from {ch}. "
-        "Weigh them together with the week and propose one plan."
-    )
+    return f"morning review: {n} pending request{'s' if n > 1 else ''} ({ch})"

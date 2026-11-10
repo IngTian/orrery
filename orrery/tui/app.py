@@ -3,11 +3,11 @@ organizer chat, and at the bottom T's theme picker over a key line generated fro
 
 The data root, the clock and the claude binary are injected so tests drive a synthetic
 database on a frozen Thursday, and a fake organizer. Each database read and write runs on a
-connection of its own, opened and closed by its thread: a reload (collect, the session, then
-the board, the chat's newest page and the waiting proposal) in the "collect" group; y, n and
-u in the "edit" group, each reloading after; an organizer turn in the "organizer" group, one
-at a time. The M and h popups, x's restart and the chat's older pages are short and run on
-the app's own thread.
+connection of its own, opened and closed by its thread: a reload (collect, the session, a
+waiting proposal's expiry, then the board, the chat's newest page and the waiting proposal) in
+the "collect" group; y, n and u in the "edit" group, each reloading after; an organizer turn
+in the "organizer" group, one at a time. The M and h popups, x's restart and the chat's older
+pages are short and run on the app's own thread.
 
 The Week tab's top panel is the week or the month (`view`; w and m switch, as does enter on
 a month's day), on one cursor date (`cursor_date`), which is the app's: a view asks to move it
@@ -77,7 +77,7 @@ DISCARDED = "discarded; requests stay pending"
 ANSWERS = {"y": "y", "n": "n"}
 UNDONE = "undone"
 NOTHING_TO_UNDO = "nothing to undo"
-WORKING = "working… (esc cancels)"
+WORKING = "working (esc cancels)"  # shown as the organizer's: after its "… "
 STILL_ANSWERING = "the organizer is still answering; esc cancels"
 NEW_CHAT = "End this organizer session and start a new one? Its transcript is kept; memory stays."
 NO_NOTES = "no notes"
@@ -104,14 +104,16 @@ def _window(last: date, starts: date, day: date, weeks: int) -> date:
     return min(max(lo, schedule.week_start(last)), hi)
 
 
-def _tell(conn: sqlite3.Connection, now: datetime, line: str) -> None:
-    """orrery's line in the active chat, for the organizer's next turn to hear. Best effort:
-    the change it reports is already committed, and the organizer's state has the proposal's
-    outcome anyway."""
+def _tell(conn: sqlite3.Connection, now: datetime, line: str, note: str) -> str:
+    """orrery's line in the active chat, for the organizer's next turn to hear; the note to
+    show: "" once the chat says it, else note. Best effort: the change it reports is already
+    committed, and the organizer's state has the proposal's outcome anyway."""
     try:
         sessions.say(conn, sessions.ensure(conn, now).id, "orrery", line, now)
     except Exception:
         logger.warning("chat line not recorded: %s", line, exc_info=True)
+        return note
+    return ""
 
 
 def _names(names, current: str) -> Content:
@@ -125,14 +127,14 @@ def _names(names, current: str) -> Content:
 class Loaded:
     """One reload: the cursor's week, or the line saying why it can't be read; the day and
     boundary it was read for; the chat's newest page, oldest first, and when the active chat
-    began; the waiting proposal and its diff, or the line saying why they can't be; pending
-    requests; last_review from settings; and for the lower left panels today's week, its
-    subjects' weekly rates and the open questions per subject with any; the subjects' colour
-    slots, and the day orrery started. Then the view and the cursor date it was read for, the
-    month view's six weeks, and for the day panel each drawn day's sittings and changes. Then
-    the Report's window: its last week and range, its days, summary, best week and rhythm, the
-    strip's subjects (the active ones and any other planned in it), and every subject's
-    assessments."""
+    began; the waiting proposal and its diff, or the line saying why they can't be shown;
+    whether this read expired one (the chat says why); pending requests; last_review from
+    settings; and for the lower left panels today's week, its subjects' weekly rates and the
+    open questions per subject with any; the subjects' colour slots, and the day orrery
+    started. Then the view and the cursor date it was read for, the month view's six weeks,
+    and for the day panel each drawn day's sittings and changes. Then the Report's window: its
+    last week and range, its days, summary, best week and rhythm, the strip's subjects (the
+    active ones and any other planned in it), and every subject's assessments."""
 
     board: WeekBoard | str
     day: date | None = None
@@ -142,6 +144,7 @@ class Loaded:
     proposal: int | None = None
     diff: tuple[DiffLine, ...] = ()
     note: str = ""
+    expired: bool = False
     pending: tuple[channels.Message, ...] = ()
     last_review: str | None = None
     this_week: WeekBoard | None = None
@@ -488,6 +491,11 @@ class OrreryApp(App):
             channels.collect(conn, now=now, today=day)
             monday = schedule.week_start(day)
             s = sessions.ensure(conn, now)  # a first open; x's restart inserts its own
+            try:  # a waiting proposal y can't keep today expires, before the chat is read
+                expired = proposals.expire(conn, now=now, today=day) is not None
+            except Exception:  # it stays waiting, its diff says why; the next reload tries again
+                logger.warning("waiting proposal not expired", exc_info=True)
+                expired = False
             row = conn.execute("select value from settings where key = 'last_review'").fetchone()
             starts = schedule.starts(conn)
             # at the first read today, or the day orrery starts if that's later
@@ -511,6 +519,7 @@ class OrreryApp(App):
                 boundary,
                 talk=tuple(reversed(sessions.all_lines(conn, limit=PAGE))),
                 since=s.started_at,
+                expired=expired,
                 pending=tuple(channels.pending_requests(conn)),
                 last_review=row[0] if row else None,
                 this_week=stats.week(conn, monday, day),
@@ -610,7 +619,7 @@ class OrreryApp(App):
             chat.stream(None)  # and a line it never recorded (busy, say) was never sent
             chat.drop_pending()
         chat.show_proposal(got.diff)
-        if got.note:
+        if got.note or got.expired:  # expired: the chat says why, so a failed y's note goes
             chat.note(got.note)
         self._maybe_review(got.pending, got.day, got.last_review)
 
@@ -760,7 +769,8 @@ class OrreryApp(App):
                 notes = [
                     f"remembered: {t}" for i, t in self._memory().items() if before.get(i) != t
                 ]
-                said = "\n".join([*notes, *([r.line] if r.line else [])])
+                # a line the transcript has shows there, never again as the note
+                said = "\n".join([*notes, *([r.line] if r.line and not r.recorded else [])])
         except Exception as e:  # run_turn never raises; the reads around it might
             logger.warning("organizer turn failed", exc_info=True)
             said = UNAVAILABLE.format(e)
@@ -787,8 +797,7 @@ class OrreryApp(App):
 
         def keep(conn: sqlite3.Connection, now: datetime, today: date) -> str:
             proposals.keep(conn, pid, now=now, today=today)
-            _tell(conn, now, f"kept proposal #{pid}")
-            return KEPT
+            return _tell(conn, now, f"kept proposal #{pid}", KEPT)
 
         self._edit(keep)
 
@@ -797,8 +806,8 @@ class OrreryApp(App):
 
         def discard(conn: sqlite3.Connection, now: datetime, today: date) -> str:
             proposals.discard(conn, pid, now=now)
-            _tell(conn, now, f"discarded proposal #{pid}; its requests stay pending")
-            return DISCARDED
+            said = f"discarded proposal #{pid}; its requests stay pending"
+            return _tell(conn, now, said, DISCARDED)
 
         self._edit(discard)
 
@@ -806,8 +815,7 @@ class OrreryApp(App):
         def undo(conn: sqlite3.Connection, now: datetime, today: date) -> str:
             if not proposals.undo_last(conn, now=now, today=today):
                 return NOTHING_TO_UNDO
-            _tell(conn, now, "undid the last kept proposal")
-            return UNDONE
+            return _tell(conn, now, "undid the last kept proposal", UNDONE)
 
         self._edit(undo)
 
