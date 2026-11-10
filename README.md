@@ -222,7 +222,7 @@ A pair (`←→`, `↑↓`, `[ ]`) is one hint on the line; `shift+tab` and `esc
 | `n` | no | (confirm) No: change nothing. |
 | `esc` | no | (confirm) As `n`. |
 
-While the chat input has focus, letters type into it and only `esc` and `enter` act there. `y` and `n` act on a waiting proposal once you leave the input, whichever tab is open. While the organizer is answering, a second line and `x` start nothing; `esc` cancels the answer.
+While the chat input has focus, letters type into it and only `esc` and `enter` act there. `y` and `n` act on a waiting proposal once you leave the input, whichever tab is open; in the input, while a proposal's diff shows, a line that is only `y` or `n` does the same when you press `enter`, even while the organizer is answering, instead of going to the organizer. While the organizer is answering, any other line and `x` start nothing; `esc` cancels the answer.
 
 ## Themes
 
@@ -311,7 +311,9 @@ When requests are pending, the organizer weighs them together and puts **one com
 
 ## The organizer
 
-The chat sits on the right of every tab, a panel titled `Organizer` with when this chat began on the right of its top border. It holds the transcript of every chat so far (scroll up for older ones; a `── new chat, <date> ──` line marks where each began), a waiting proposal's diff with its `y keep · n discard` line, and the input at the bottom, `› message orrery` while it's empty. Press `c` to move to the input, type your message and press `enter` to send it to the organizer; its reply streams in above the input. Press `esc` to cancel a turn while it runs, or else to leave the input.
+The chat sits on the right of every tab, a panel titled `Organizer` with when this chat began on the right of its top border. It holds the transcript of every chat so far (scroll up for older ones; a `── new chat, <date> ──` line marks where each began), a waiting proposal's diff with its `y keep · n discard` line, and the input at the bottom, `› message orrery` while it's empty. Press `c` to move to the input, type your message and press `enter` to send it to the organizer; its reply streams in above the input, as plain text (a `**bold**` span shows in bold). Press `esc` to cancel a turn while it runs, or else to leave the input.
+
+The diff's changed lines name the requests behind them by number, e.g. `(request #12)`; each request's text is quoted once, under the proposal's rationale.
 
 The organizer runs one turn at a time: each turn is one `claude` subprocess on the machine's configured Claude account, restricted to orrery's tools only. A turn times out after 5 minutes. While a turn runs in another orrery window, you see `the organizer is busy in another window` when you send a line, press `x`, or a morning review starts in this one.
 
@@ -329,7 +331,7 @@ The organizer:
 
 **Memory** records only what you say or confirm, such as a preference. It does not record what was done when; the database keeps that history. To drop a memory note, press `M` to see the list with its `#id`, then ask the organizer to forget that id.
 
-The organizer cannot change the plan directly: only your `y` keeps a proposal.
+The organizer cannot change the plan directly: only your `y` keeps a proposal. When you keep, discard or undo one, orrery says so in the chat (`kept proposal #3`). The organizer's next turn starts with whether a proposal is waiting or how the last one ended (`the last, #3, was kept`), read from the proposals themselves, so it never has to guess, even when you answered while it was still replying or in another window.
 
 ### New chat
 

@@ -109,9 +109,12 @@ def run_turn(
             stack.callback(conn.close)
             s = sessions.ensure(conn, now())
             talked = sessions.has_talk(conn, s.id)
+            news = sessions.unheard(conn, s.id)  # read before the line, which goes as itself
             sessions.say(conn, s.id, speaker, line, now())
             try:
-                r = _turn(conn, s, root, settings, line, talked, now, on_text, cancel, deadline)
+                r = _turn(
+                    conn, s, root, settings, line, talked, news, now, on_text, cancel, deadline
+                )
             except Exception:
                 log.exception("organizer turn failed")
                 r = TurnResult("", False, FAILED)
@@ -123,7 +126,9 @@ def run_turn(
         return TurnResult("", False, FAILED)
 
 
-def _turn(conn, s, root, settings, line, talked, now, on_text, cancel, deadline) -> TurnResult:
+def _turn(
+    conn, s, root, settings, line, talked, news, now, on_text, cancel, deadline
+) -> TurnResult:
     claude = settings.claude_path or (
         None if os.environ.get("ORRERY_DISABLE_EXTERNAL_RUNNERS") == "1" else shutil.which("claude")
     )
@@ -142,7 +147,9 @@ def _turn(conn, s, root, settings, line, talked, now, on_text, cancel, deadline)
     today = schedule.today(now(), settings.day_boundary_hour)
 
     def message(fresh: bool) -> str:
-        m = prompt.state(conn, root, today, fresh=fresh) + "\n\n" + line
+        # a fresh Claude session gets the earlier lines, if any were said, and history instead
+        m = prompt.state(conn, root, today, fresh=fresh, news=() if fresh else news)
+        m += "\n\n" + line
         if fresh and talked:
             earlier = sessions.transcript(conn, s.id, limit=21)[:-1]  # all but the current line
             said = "\n".join(f"{ln.speaker}: {ln.text}" for ln in earlier)

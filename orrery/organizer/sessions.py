@@ -171,6 +171,21 @@ def all_lines(
     return [Line(*r) for r in rows]
 
 
+def unheard(conn: sqlite3.Connection, session_id: int) -> list[str]:
+    """orrery's rows since the organizer's newest reply in the session, oldest first: what a
+    resumed Claude session was never told, such as a keep or a discard."""
+    # ponytail: a row said mid-turn sits before that turn's reply, so it is missed; the keep or
+    # discard it would report reaches prompt.state from the proposals table anyway. A heard_id
+    # on organizer_sessions if another mid-turn line comes to matter.
+    rows = conn.execute(
+        "select text from transcript where session_id = ? and speaker = 'orrery' and id >"
+        " (select coalesce(max(id), 0) from transcript where session_id = ?"
+        " and speaker = 'organizer') order by id",
+        (session_id, session_id),
+    )
+    return [r[0] for r in rows]
+
+
 def has_talk(conn: sqlite3.Connection, session_id: int) -> bool:
     """True if any rows by you or the organizer exist."""
     row = conn.execute(

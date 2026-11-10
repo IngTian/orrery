@@ -102,7 +102,9 @@ def test_grant_posts_outcome_and_undo_reverses(week_db):
         now=NOW,
         today=TODAY,
     )
-    assert proposals.diff(week_db, p, TODAY)[2].text.endswith('  (math: "proof needs a 2nd pass")')
+    lines = proposals.diff(week_db, p, TODAY)
+    assert lines[1].text == f'math request #{rid}: "proof needs a 2nd pass"'
+    assert lines[3].text.endswith(f"  (request #{rid})")
     proposals.keep(week_db, p.id, now=NOW, today=TODAY)
     assert [o.text for o in channels.inbox(week_db, "math").outcomes] == [f"request #{rid}: grant"]
     proposals.undo_last(week_db, now=NOW, today=TODAY)
@@ -196,6 +198,8 @@ def test_discard_leaves_requests_pending(week_db):
     proposals.discard(week_db, p.id, now=NOW)
     assert state_of(week_db, p.id) == "discarded" and proposals.waiting(week_db) is None
     assert [m.id for m in channels.pending_requests(week_db)] == [rid]
+    with pytest.raises(proposals.Stale, match=proposals.STALE):  # no longer waiting
+        proposals.discard(week_db, p.id, now=NOW)
 
 
 def test_your_report_creates_progress(week_db):
@@ -267,17 +271,18 @@ def test_diff_lines_for_everything_else(week_db):
     assert [(ln.sign, ln.text) for ln in lines] == [
         (" ", f"proposal #{p.id} · organizer"),
         (" ", "sundays are free"),
+        (" ", f'math request #{rid}: "more reps"'),
         ("-", "Fri 11/13  math · learn ×2, geography ×1"),
         ("+", "Fri 11/13  math · learn ×2, geography ×1"),
         ("-", "every Sun  rest"),
-        ("+", 'every Sun  math · rep ×1  (math: "more reps")'),
+        ("+", f"every Sun  math · rep ×1  (request #{rid})"),
         ("+", "Wed 11/11  report math · rep ×1 done"),
         ("+", f"withdraw question #{qid} (math)"),
         (" ", f"math request #{rid}: partial — one rep on Sundays"),
         (" ", "plan fit  Math planned 20 → 21"),  # next week takes the new template
         (" ", "plan fit  Geography planned 10 → 9"),
     ]
-    assert lines[3].struck == ((28, 40),)
+    assert lines[4].struck == ((28, 40),)
 
 
 def test_keep_and_undo_everything_else(week_db):
@@ -362,7 +367,44 @@ def test_request_text_cannot_add_diff_lines(week_db):
     lines = proposals.diff(week_db, p, TODAY)
     assert not any("\n" in ln.text or "\r" in ln.text for ln in lines)
     [line] = [ln for ln in lines if "fake" in ln.text]
-    assert line.text.endswith('  (math: "2nd pass")  + Sat 11/14  fake ×4  (finance: "ok")')
+    assert line == proposals.DiffLine(
+        " ", f'math request #{rid}: "2nd pass")  + Sat 11/14  fake ×4  (finance: "ok"'
+    )
+
+
+def test_diff_cites_requests_by_number_and_quotes_each_once(week_db):
+    """A changed line names the requests behind it by number; each request's text comes once,
+    under the rationale, however many lines it is behind."""
+    a = _request(week_db, text="lorem ipsum dolor sit amet", key="a")
+    b = _request(week_db, text="consectetur adipiscing elit", key="b")
+    p = proposals.propose(
+        week_db,
+        ops=[
+            ops.Add(SAT, "main", "math", "learn", 1, for_request=a),
+            ops.Add(SAT, "main", "math", "fun", 1, for_request=b),
+            ops.Add(SUN, "main", "math", "learn", 1, for_request=a),
+            ops.Remove(FRI, "geography", "geography", for_request=b),
+        ],
+        rationale="the weekend has room",
+        dispositions=[proposals.Disposition(a, "grant"), proposals.Disposition(b, "grant")],
+        author="organizer",
+        now=NOW,
+        today=TODAY,
+    )
+    lines = proposals.diff(week_db, p, TODAY)
+    assert [(ln.sign, ln.text) for ln in lines[1:4]] == [
+        (" ", "the weekend has room"),
+        (" ", f'math request #{a}: "lorem ipsum dolor sit amet"'),
+        (" ", f'math request #{b}: "consectetur adipiscing elit"'),
+    ]
+    every = "\n".join(ln.text for ln in lines)
+    assert every.count("lorem ipsum") == 1 and every.count("consectetur") == 1
+    plus = {ln.text.split("  ")[0]: ln for ln in lines if ln.sign == "+"}
+    assert plus["Sat 11/14"].text.endswith(f"  (request #{a}, request #{b})")
+    assert plus["Sun 11/15"].text.endswith(f"  (request #{a})")
+    fri = plus["Fri 11/13"]
+    assert fri.text.endswith(f"  (request #{b})")
+    assert [fri.text[x:y] for x, y in fri.struck] == ["geography ×1"]
 
 
 def test_report_line_says_partial_when_kept_as_partial(week_db):

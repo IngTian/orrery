@@ -5,9 +5,11 @@ diff, the last key's line, and the input.
 
 From 110 columns it is docked on the right, 30% of the window from 37 to 72 columns wide.
 Narrower it folds to a one-line strip at the bottom, and c opens it over the content until
-esc. Transcript text reaches the screen as plain Content, never parsed as markup.
+esc. Transcript text reaches the screen as plain Content, never parsed as markup; only an
+organizer row's ** pairs are read, as bold spans built by hand.
 """
 
+import re
 from collections.abc import Callable, Sequence
 from datetime import date
 
@@ -41,10 +43,29 @@ def _divider(line: Line) -> bool:
     return line.speaker == "orrery" and line.text == STARTED and bool(line.at)
 
 
+# a **span** outside any word, its text starting and ending with neither space nor *
+# ASCII word characters only: next to CJK text a pair is still bold (\w would count 粗 as a word)
+_WORD = "A-Za-z0-9_"
+_BOLD = re.compile(rf"(?<![{_WORD}])\*\*(?=[^\s*])(.+?)(?<=[^\s*])\*\*(?![{_WORD}])")
+# any other **, unless inside a word (x**2)
+_STRAY = re.compile(rf"(?<![{_WORD}])\*\*|\*\*(?![{_WORD}])")
+
+
+def _reply(text: str) -> Content:
+    """An organizer row, each **pair**'s span bold and its markers gone; an unpaired ** goes
+    too, but not one inside a word. Spans built by hand: nothing else in the text is read,
+    never as markup."""
+    parts = _BOLD.split(text)  # plain, bold, plain, ...
+    styled = ((p, "bold") if i % 2 else _STRAY.sub("", p) for i, p in enumerate(parts))
+    return Content.assemble("organizer: ", *styled)
+
+
 def render_line(line: Line) -> Content:
     """A transcript row as `<speaker>: <text>`; a chat's first row as its divider."""
     if _divider(line):
         return Content.styled(f"── new chat, {_day(line.at)} ──", MUTED)
+    if line.speaker == "organizer":
+        return _reply(line.text)
     return Content.styled(f"{line.speaker}: {line.text}", _STYLE.get(line.speaker, ""))
 
 
@@ -241,7 +262,7 @@ class ChatPanel(Vertical):
         """The reply so far (or the working line), under the transcript; None clears it."""
         self._live = text
         live = self.query_one("#live", Static)
-        live.update(Content(f"organizer: {text}") if text is not None else "")
+        live.update(_reply(text) if text is not None else "")
         live.display = text is not None
         self._paint_strip()
 
@@ -270,7 +291,7 @@ class ChatPanel(Vertical):
         elif self._note:
             line = self._note
         elif self._live is not None:
-            line = f"organizer: {self._live}"
+            line = _reply(self._live).plain
         else:
             line = self._last
         self.query_one("#strip", Static).update(line)

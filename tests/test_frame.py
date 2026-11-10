@@ -552,7 +552,7 @@ async def test_narrow_strip_says_proposal_waiting_and_y_does_nothing_until_overl
         await pilot.press("escape")
         await pilot.pause()
         assert not chat.has_class("-overlay") and chat.region.height == 1
-        assert _text(app, "#strip") == "── new chat, Thu 11/12 ──"
+        assert _text(app, "#strip") == f"orrery: kept proposal #{p.id}"  # the newest row
     with closing(db.open_existing(week_home)) as conn:
         assert state_of(conn, p.id) == "kept"
 
