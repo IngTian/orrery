@@ -41,6 +41,17 @@ class Stale(Exception):
     """The proposal no longer matches the database, or the change to undo was changed since."""
 
 
+class Waiting(OpError):
+    """propose refused while proposal #pid waits and isn't named in replaces."""
+
+    def __init__(self, pid: int):
+        super().__init__(
+            f"proposal #{pid} is waiting for the user's y/n: fold its changes into a new proposal"
+            f" that passes replaces={pid}, or wait for their answer"
+        )
+        self.pid = pid
+
+
 @dataclass(frozen=True)
 class Disposition:
     request_id: int
@@ -194,12 +205,15 @@ def propose(
     conn.execute("BEGIN IMMEDIATE")
     try:
         (old,) = conn.execute("select max(id) from proposals where state = 'waiting'").fetchone()
-        if replaces != old:
+        if replaces != old and old is not None:
+            raise Waiting(old)
+        if replaces != old:  # answered or expired since the organizer last looked, or never was
+            how = ended(conn, replaces)
+            if how is None:
+                raise OpError(f"proposal #{replaces} isn't waiting; propose without replaces")
+            tail = ", leaving out its changes: they're in the week now" if how == "was kept" else ""
             raise OpError(
-                f"proposal #{replaces} isn't waiting; propose without replaces"
-                if old is None
-                else f"proposal #{old} is waiting for the user's y/n: fold its changes into a new"
-                f" proposal that passes replaces={old}, or wait for their answer"
+                f"proposal #{replaces} {how}; none waits, so propose without replaces{tail}"
             )
         conn.execute("update proposals set state = 'replaced' where id = ?", (old,))
         pid = conn.execute(
@@ -246,6 +260,23 @@ def get(conn: sqlite3.Connection, proposal_id: int) -> Proposal:
         created_at,
         state,
     )
+
+
+def ended(conn: sqlite3.Connection, pid: int) -> str | None:
+    """How proposal #pid ended, such as "was kept, then undone" or "expired: why"; None if it
+    waits or there's none. Its row alone: ops that no longer parse can't stop it."""
+    row = conn.execute(
+        "select state, exists(select 1 from changes where undoes = p.change_id),"
+        " (select reason from changes where kind = 'expire' and proposal_id = p.id)"
+        " from proposals p where id = ?",
+        (pid,),
+    ).fetchone()
+    if row is None or row[0] == "waiting":
+        return None
+    state, undone, expired = row
+    if expired is not None:
+        return f"expired: {expired}"
+    return f"was {state}" + (", then undone" if undone else "")
 
 
 def waiting(conn: sqlite3.Connection) -> Proposal | None:

@@ -354,6 +354,34 @@ async def test_a_failed_y_expires_it_at_once(week_home):
         _expired(app, week_home, pid)
 
 
+async def test_the_expiry_note_survives_a_newer_reload(week_home, monkeypatch):
+    """The read that expired it is overtaken (w, m, a Shift across weeks) and never drawn; the
+    newer one finds nothing waiting. The line still shows as the note."""
+    with closing(db.open_existing(week_home)) as conn:
+        pid = propose_move(conn).id
+    held, release, real = threading.Event(), threading.Event(), proposals.expire
+
+    def expire(conn, **kwargs):
+        line = real(conn, **kwargs)
+        if line:  # committed: this read waits until a newer one has replaced it
+            held.set()
+            release.wait(5)
+        return line
+
+    monkeypatch.setattr(proposals, "expire", expire)
+    line, app = EXPIRED.format(pid, "past days keep their plan"), _app(week_home, FRI_6AM)
+    try:
+        async with app.run_test(size=SIZE) as pilot:
+            await _until(pilot, held.is_set)
+            app.app_reload()  # cancels the held one, exclusive in "collect"
+            await _until(pilot, lambda: f"orrery: {line}" in _talk(app))  # the newer one drew
+            release.set()
+            await settle(pilot, app)
+            _expired(app, week_home, pid)
+    finally:
+        release.set()
+
+
 MOVE_0 = {"op": "move", "date": "2026-11-12", "subject": "math", "kind": "learn", "sessions": 0}
 
 

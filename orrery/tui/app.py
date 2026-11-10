@@ -125,14 +125,14 @@ def _names(names, current: str) -> Content:
 class Loaded:
     """One reload: the cursor's week, or the line saying why it can't be read; the day and
     boundary it was read for; the chat's newest page, oldest first, and when the active chat
-    began; the waiting proposal and its diff; the line saying it expired, or why they can't be
-    shown; pending requests; last_review from settings; and for the lower left panels today's
-    week, its subjects' weekly rates and the open questions per subject with any; the subjects'
-    colour slots, and the day orrery started. Then the view and the cursor date it was read for,
-    the month view's six weeks, and for the day panel each drawn day's sittings and changes.
-    Then the Report's window: its last week and range, its days, summary, best week and rhythm,
-    the strip's subjects (the active ones and any other planned in it), and every subject's
-    assessments."""
+    began; the waiting proposal and its diff, or the line saying why they can't be shown; the
+    line saying this read expired one; pending requests; last_review from settings; and for
+    the lower left panels today's week, its subjects' weekly rates and the open questions per
+    subject with any; the subjects' colour slots, and the day orrery started. Then the view and
+    the cursor date it was read for, the month view's six weeks, and for the day panel each
+    drawn day's sittings and changes. Then the Report's window: its last week and range, its
+    days, summary, best week and rhythm, the strip's subjects (the active ones and any other
+    planned in it), and every subject's assessments."""
 
     board: WeekBoard | str
     day: date | None = None
@@ -142,6 +142,7 @@ class Loaded:
     proposal: int | None = None
     diff: tuple[DiffLine, ...] = ()
     note: str = ""
+    expired: str = ""
     pending: tuple[channels.Message, ...] = ()
     last_review: str | None = None
     this_week: WeekBoard | None = None
@@ -477,6 +478,9 @@ class OrreryApp(App):
             got = Loaded(UNAVAILABLE.format(e))
         if not get_current_worker().is_cancelled:  # a newer reload draws instead
             self.call_from_thread(self._loaded, got)
+        elif got.expired:  # but finds nothing waiting: the line is this one's to show.
+            # call_later posts a message: thread-safe, and a no-op once the app is closing
+            self.call_later(lambda: self.query_one(ChatPanel).note(got.expired))
 
     def _read(self) -> Loaded:
         got = self._connect()
@@ -516,7 +520,7 @@ class OrreryApp(App):
                 boundary,
                 talk=tuple(reversed(sessions.all_lines(conn, limit=PAGE))),
                 since=s.started_at,
-                note=expired,
+                expired=expired,
                 pending=tuple(channels.pending_requests(conn)),
                 last_review=row[0] if row else None,
                 this_week=stats.week(conn, monday, day),
@@ -616,8 +620,8 @@ class OrreryApp(App):
             chat.stream(None)  # and a line it never recorded (busy, say) was never sent
             chat.drop_pending()
         chat.show_proposal(got.diff)
-        if got.note:
-            chat.note(got.note)
+        if line := got.expired or got.note:
+            chat.note(line)
         self._maybe_review(got.pending, got.day, got.last_review)
 
     @work(thread=True, group="edit")

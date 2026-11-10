@@ -78,7 +78,10 @@ def test_system_prompt_shape():
     p = prompt.system()
     assert not p.startswith("-") and p.endswith(fence.CORPUS_NOTICE)
     assert all(w in p for w in VERDICT_WORDS)
-    for name in ("propose(operations, rationale, dispositions)", "ask(subject, question)"):
+    for name in (
+        "propose(operations, rationale, dispositions, replaces)",
+        "ask(subject, question)",
+    ):
         assert name in p
 
 

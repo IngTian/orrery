@@ -102,6 +102,15 @@ def _struck(ln: proposals.DiffLine) -> str:
     return t
 
 
+def _diff_text(conn: sqlite3.Connection, pid: int, today: date) -> str:
+    """Proposal #pid's diff as the organizer reads it, or the line saying why it can't be."""
+    try:
+        lines = proposals.diff(conn, proposals.get(conn, pid), today)
+    except Exception as e:  # e.g. ops that no longer parse: the refusal still says what to do
+        return f"can't show it: {e}"
+    return "\n".join(f"{ln.sign} {_struck(ln)}" for ln in lines)
+
+
 def build_server(
     root: Callable[[], Path] = paths.data_root,
     now: Callable[[], datetime] = datetime.now,
@@ -634,10 +643,9 @@ def build_server(
                     replaces=replaces,
                 )
 
-                # Format diff
-                diff_lines = proposals.diff(conn, p, today)
-                diff_text = "\n".join(f"{ln.sign} {_struck(ln)}" for ln in diff_lines)
-                return f"proposal #{p.id} is waiting for the user:\n{diff_text}"
+                return f"proposal #{p.id} is waiting for the user:\n{_diff_text(conn, p.id, today)}"
+            except proposals.Waiting as e:  # what waits, for the new one to fold in
+                raise ToolError(f"{e}. It reads:\n{wrap(_diff_text(conn, e.pid, today))}") from None
             except (ops.OpError, ValueError) as e:
                 raise ToolError(str(e)) from None
             finally:

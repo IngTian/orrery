@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 from pathlib import Path
 
-from orrery import channels, store, text
+from orrery import channels, proposals, store, text
 from orrery.ai import fence
 from orrery.organizer import sessions
 
@@ -26,9 +26,9 @@ bare y or n answers the proposal, not you. One proposal waits at a time. To chan
 one, fold its changes into a new proposal that passes replaces=<its id> (orrery tells the user \
 it replaced the old one, which is never kept); otherwise wait for the user's y or n. Your \
 tools: overview, history, requests, today, week and channel to read; propose(operations, \
-rationale, dispositions) to put one change to the user; ask(subject, question) to ask a mentor; \
-remember(note) and forget(note_id) for memory. A new subject or kind must be kept before a \
-proposal can plan it, so propose it on its own first.
+rationale, dispositions, replaces) to put one change to the user; ask(subject, question) to ask \
+a mentor; remember(note) and forget(note_id) for memory. A new subject or kind must be kept \
+before a proposal can plan it, so propose it on its own first.
 
 Requests: weigh all pending requests together, never one at a time. Label each one grant, \
 partial, decline or defer in the dispositions, and say in the rationale what was given up.
@@ -87,21 +87,13 @@ def _proposal(conn: sqlite3.Connection) -> str:
     """The waiting proposal, or how the last one ended, from the proposals table: true however
     the y or n came, mid-turn or in another window. Its id and state alone: a proposal whose
     ops no longer parse must not stop every turn. One that expired says why."""
-    last = conn.execute(
-        "select id, state, exists(select 1 from changes where undoes = p.change_id),"
-        " (select reason from changes where kind = 'expire' and proposal_id = p.id)"
-        " from proposals p order by id desc limit 1"
-    ).fetchone()
+    last = conn.execute("select max(id) from proposals").fetchone()[0]
     if last is None:
         return "no proposal waiting"
-    pid, state, undone, expired = last
-    if state == "waiting":
-        return f"proposal #{pid} is waiting for the user's y/n"
-    if expired is not None:
-        return f"no proposal waiting; the last, #{pid}, expired: {expired}"
-    return f"no proposal waiting; the last, #{pid}, was {state}" + (
-        ", then undone" if undone else ""
-    )
+    how = proposals.ended(conn, last)
+    if how is None:
+        return f"proposal #{last} is waiting for the user's y/n"
+    return f"no proposal waiting; the last, #{last}, {how}"
 
 
 def review_line(pending: Sequence[channels.Message]) -> str:

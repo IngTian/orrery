@@ -382,6 +382,9 @@ async def test_propose_while_one_waits_must_name_it(week_home):
             week_home, "propose", {"operations": [mv], "rationale": "y", "replaces": replaces}
         )
         assert err and "proposal #1 is waiting for the user's y/n" in out and "replaces=1" in out
+        # what waits, as propose gave it, fenced: a session that lost it can still fold it in
+        shown = "<orrery:untrusted>  proposal #1 · organizer\n  x\n- Thu 11/12  math · learn ×2,"
+        assert shown in out and "+ Thu 11/12  ~~math · learn ×2~~, geography ×1" in out
     err, out = await _call(
         week_home, "propose", {"operations": [mv], "rationale": "y", "replaces": 1}
     )
@@ -457,7 +460,7 @@ async def test_organizer_role_unchanged(week_home):
     async with Client(srv, mode="legacy") as c:
         assert c.instructions is None
         assert {t.name: _h(t.description) for t in (await c.list_tools()).tools} == _ORGANIZER_DOCS
-    assert _h(prompt.system()) == "e006a36460ead8c6"
+    assert _h(prompt.system()) == "47928c2182155846"
     _, today = await _call(week_home, "today", {"subject": "math"})
     assert today.startswith("<orrery:untrusted>Thu 11/12 · today\n")
     with closing(db.open_existing(week_home)) as conn:

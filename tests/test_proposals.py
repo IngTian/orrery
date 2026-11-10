@@ -66,6 +66,29 @@ def test_replaces_with_nothing_waiting_is_refused(week_db):
     assert proposals.waiting(week_db) is None
 
 
+def test_replaces_naming_one_answered_meanwhile_says_how_it_ended(week_db):
+    """The user kept it, or it expired, while the organizer was replying: the refusal says so,
+    so a re-filed proposal leaves out what was kept."""
+    a = propose_move(week_db)
+    proposals.keep(week_db, a.id, now=NOW, today=TODAY)
+    add = [ops.Add(SAT, "main", "math", "learn", 1)]
+    with pytest.raises(ops.OpError) as e:
+        propose_move(week_db, ops=add, replaces=a.id)
+    assert str(e.value) == (
+        f"proposal #{a.id} was kept; none waits, so propose without replaces, leaving out its"
+        " changes: they're in the week now"
+    )
+    b = propose_move(week_db, ops=[ops.Move(TODAY, "geography", "geography", FRI)])
+    proposals.expire(week_db, now=FRI_6AM, today=FRI)
+    with pytest.raises(ops.OpError) as e:
+        propose_move(week_db, ops=add, replaces=b.id, now=FRI_6AM, today=FRI)
+    assert str(e.value) == (
+        f"proposal #{b.id} expired: past days keep their plan; none waits, so propose without"
+        " replaces"
+    )
+    assert proposals.waiting(week_db) is None
+
+
 def test_a_replacement_says_so_in_the_chat_once(week_db):
     sessions.ensure(week_db, NOW)
     a = propose_move(week_db)
@@ -104,13 +127,25 @@ def test_a_proposal_whose_day_passed_expires_once_and_its_requests_stay_pending(
 
 
 def test_a_proposal_that_still_applies_never_expires(week_db):
-    """Not on the day it was made, nor a day later when it touches no day."""
+    """Not on the day it was made, nor a day later when it touches no day, nor once the day or
+    the week turns when it touches only days still ahead; and y still keeps it."""
     p = propose_move(week_db)
     assert proposals.expire(week_db, now=NOW, today=TODAY) is None
     proposals.discard(week_db, p.id, now=NOW)
     t = propose_move(week_db, ops=[ops.TemplateSet(6, "main", "math", "rep", 1)])
     assert proposals.expire(week_db, now=FRI_6AM, today=FRI) is None
     assert proposals.waiting(week_db).id == t.id and _said(week_db) == []
+    proposals.discard(week_db, t.id, now=NOW)
+    f = propose_move(week_db, ops=[ops.Move(FRI, "geography", "geography", SAT)])
+    assert proposals.expire(week_db, now=FRI_6AM, today=FRI) is None
+    proposals.keep(week_db, f.id, now=FRI_6AM, today=FRI)
+    mon = MON + dt.timedelta(days=7)
+    n = propose_move(week_db, ops=[ops.Add(mon, "main", "math", "learn", 1)])
+    mon_6am = dt.datetime.combine(mon, dt.time(6))  # the week turned: Monday is today
+    channels.collect(week_db, now=mon_6am, today=mon)
+    schedule.ensure_pinned(week_db, schedule.due_mondays(week_db, mon), mon_6am)
+    assert proposals.expire(week_db, now=mon_6am, today=mon) is None
+    proposals.keep(week_db, n.id, now=mon_6am, today=mon)
     assert week_db.execute("select count(*) from changes where kind = 'expire'").fetchone() == (0,)
 
 
