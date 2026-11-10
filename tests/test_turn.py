@@ -6,6 +6,7 @@ import threading
 import time
 from contextlib import closing
 from dataclasses import replace
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -102,6 +103,8 @@ def test_system_prompt_pins_keeps_plain_text_and_silent_tools():
         " sentences, with no **, #, backticks or bullet syntax",
         "call tools silently, then write one reply after them, never commentary on your own"
         " tool use",
+        "To change a waiting one, fold its changes into a new proposal that passes"
+        " replaces=<its id>",
     ):
         assert rule in p, rule
 
@@ -134,6 +137,16 @@ def test_state_says_how_the_last_proposal_ended(week_home, tmp_path):
     assert f"\n\nno proposal waiting; the last, #{dropped}, was discarded\n\nmemory:" in a
     assert f"\n\nno proposal waiting; the last, #{kept}, was kept\n\nmemory:" in b
     assert f"\n\nno proposal waiting; the last, #{kept}, was kept, then undone\n\nmemory:" in c
+
+
+def test_state_says_the_last_proposal_expired_and_why(week_home):
+    with closing(db.open_existing(week_home)) as conn:
+        pid = propose_move(conn).id
+        fri = TODAY + timedelta(days=1)
+        proposals.expire(conn, now=datetime(2026, 11, 13, 6), today=fri)
+        got = prompt.state(conn, week_home, fri, fresh=False)
+    line = f"no proposal waiting; the last, #{pid}, expired: past days keep their plan"
+    assert f"\n\n{line}\n\nmemory:" in got
 
 
 def test_a_keep_while_the_organizer_answers_reaches_its_next_turn(week_home, tmp_path):

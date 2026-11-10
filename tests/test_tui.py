@@ -194,7 +194,7 @@ async def test_y_keeps_only_what_was_shown(week_home):
         await settle(pilot, app)
         assert _text(app, "#proposal").startswith(f"proposal #{first.id} · ")
         with closing(db.open_existing(week_home)) as conn:
-            second = propose_move(conn, rationale="the same move, asked again")
+            second = propose_move(conn, rationale="the same move, asked again", replaces=first.id)
         await pilot.press("y")
         await settle(pilot, app)
         assert _text(app, "#note") == proposals.STALE
@@ -275,21 +275,83 @@ async def test_reload_runs_collect(week_home):
         assert "▌learn ◐○" in _column(app, 0)
 
 
-async def test_stale_proposal_after_boundary_still_opens(week_home):
+EXPIRED = (
+    "proposal #{} can't apply any more: {}; its requests stay pending — ask the organizer for a"
+    " new one"
+)
+
+
+def _talk(app: OrreryApp) -> list[str]:
+    """The chat's rows as shown, oldest first."""
+    return [str(w.content) for w in app.query("#log > .row") if w.display]
+
+
+def _expired(app: OrreryApp, home, pid: int) -> None:
+    """pid expired, said once as the note and in the chat, and the panel gone."""
+    line = EXPIRED.format(pid, "past days keep their plan")
+    assert _text(app, "#note") == line
+    assert not app.query_one("#proposal").display and app.shown_proposal is None
+    assert _talk(app).count(f"orrery: {line}") == 1
+    with closing(db.open_existing(home)) as conn:
+        assert state_of(conn, pid) == "discarded"
+
+
+async def test_a_proposal_whose_day_passed_expires_when_the_app_opens(week_home):
     with closing(db.open_existing(week_home)) as conn:
-        p = propose_move(conn)  # on Thursday, about Thursday
+        pid = propose_move(conn).id  # on Thursday, about Thursday
     app = _app(week_home, FRI_6AM)
     async with app.run_test(size=SIZE) as pilot:
         await settle(pilot, app)
         assert app.day == FRI
-        diff = [line.strip() for line in _text(app, "#proposal").splitlines()]
-        assert diff[0] == f"proposal #{p.id} · organizer"
-        assert "can't apply now: past days keep their plan" in diff
+        _expired(app, week_home, pid)
+        await pilot.press("y", "r")  # nothing shown: y does nothing; a reload says no more
+        await settle(pilot, app)
+        assert not app.query_one("#note").display
+        talk = _talk(app)
+        assert talk[-1].startswith(f"orrery: proposal #{pid} can't apply any more")
+        assert sum("can't apply any more" in r for r in talk) == 1
+
+
+async def test_the_day_change_expires_the_waiting_proposal(week_home, monkeypatch):
+    """The minute check after midnight and the boundary: shown before, expired after."""
+    clock = [datetime(2026, 11, 12, 23, 0)]
+    timers, real = [], OrreryApp.set_interval
+
+    def spy(self, interval, callback=None, **kwargs):
+        timers.append((interval, callback))
+        return real(self, interval, callback, **kwargs)
+
+    monkeypatch.setattr(OrreryApp, "set_interval", spy)
+    with closing(db.open_existing(week_home)) as conn:
+        pid = propose_move(conn).id
+    app = OrreryApp(root=lambda: week_home, now=lambda: clock[0])
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        assert app.shown_proposal == pid and app.query_one("#proposal").display
+        (check,) = [callback for interval, callback in timers if interval == 60]
+        clock[0] = datetime(2026, 11, 13, 0, 30)  # past midnight, still Thursday's day
+        check()
+        await settle(pilot, app)
+        assert app.shown_proposal == pid
+        clock[0] = FRI_6AM
+        check()
+        await settle(pilot, app)
+        _expired(app, week_home, pid)
+
+
+async def test_a_failed_y_expires_it_at_once(week_home):
+    """y after the boundary, before the minute check has noticed: it expires there and then."""
+    clock = [NOW]
+    with closing(db.open_existing(week_home)) as conn:
+        pid = propose_move(conn).id
+    app = OrreryApp(root=lambda: week_home, now=lambda: clock[0])
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        assert app.shown_proposal == pid
+        clock[0] = FRI_6AM
         await pilot.press("y")
         await settle(pilot, app)
-        assert _text(app, "#note") == "past days keep their plan"
-    with closing(db.open_existing(week_home)) as conn:
-        assert state_of(conn, p.id) == "waiting"
+        _expired(app, week_home, pid)
 
 
 MOVE_0 = {"op": "move", "date": "2026-11-12", "subject": "math", "kind": "learn", "sessions": 0}
@@ -298,11 +360,12 @@ MOVE_0 = {"op": "move", "date": "2026-11-12", "subject": "math", "kind": "learn"
 @pytest.mark.parametrize(
     ("op", "line"),
     [
-        ({**MOVE_0, "to": "2026-11-14"}, "can't apply now: sessions must be at least 1"),
-        ({"op": "bogus"}, "can't show the waiting proposal: unknown op 'bogus'"),
+        ({**MOVE_0, "to": "2026-11-14"}, EXPIRED.format(1, "sessions must be at least 1")),
+        ({"op": "bogus"}, EXPIRED.format(1, "unknown op 'bogus'")),
     ],
 )
 async def test_a_bad_stored_proposal_leaves_the_board_up(week_home, op, line):
+    """One keep would refuse expires, and says why."""
     with closing(db.open_existing(week_home)) as conn:
         store_waiting(conn, [op])
     app = _app(week_home)

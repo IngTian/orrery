@@ -307,6 +307,10 @@ When requests are pending, the organizer weighs them together and puts **one com
 
 **Discarding it** (`n`) changes nothing: the requests stay pending.
 
+**One waits at a time.** While a proposal waits, the organizer can't put another to you unless the new one names the waiting one, folding its changes in; orrery says so in the chat (`proposal #4 replaces #3 (#3 was not kept)`), so a proposal never vanishes unseen.
+
+**One that can't apply any more expires**, such as one about a day now past. orrery checks each time it reads the week, such as when it opens, at the day boundary and after a `y` that can't keep it; it says so in the chat (`proposal #3 can't apply any more: past days keep their plan; its requests stay pending — ask the organizer for a new one`), and the diff goes. Nothing in the schedule changes, and its requests stay pending. One that would still apply never expires.
+
 **Undo** (`u`) is a new compensating change; it never deletes history. It works newest first and survives a restart. Undoing a kept proposal sets requests back to pending and posts a `reversed` outcome to each mentor.
 
 ## The organizer
@@ -325,13 +329,13 @@ Each message you send is one turn; several rounds of back and forth make one cha
 
 The organizer:
 - Reads the schedule (tools: `overview`, `history`, `today`, `week`, `channel`, `requests`)
-- Proposes changes: `propose(operations, rationale, dispositions)` puts one combined proposal to you
+- Proposes changes: `propose(operations, rationale, dispositions, replaces)` puts one combined proposal to you; while one waits, a new one must name it in `replaces`
 - Asks mentors questions: `ask(subject, question)`
 - Remembers preferences: `memory` lists notes; `remember(note)` adds one; `forget(note_id)` drops one
 
 **Memory** records only what you say or confirm, such as a preference. It does not record what was done when; the database keeps that history. To drop a memory note, press `M` to see the list with its `#id`, then ask the organizer to forget that id.
 
-The organizer cannot change the plan directly: only your `y` keeps a proposal. When you keep, discard or undo one, orrery says so in the chat (`kept proposal #3`). The organizer's next turn starts with whether a proposal is waiting or how the last one ended (`the last, #3, was kept`), read from the proposals themselves, so it never has to guess, even when you answered while it was still replying or in another window.
+The organizer cannot change the plan directly: only your `y` keeps a proposal. When you keep, discard or undo one, orrery says so in the chat (`kept proposal #3`). The organizer's next turn starts with whether a proposal is waiting or how the last one ended (`the last, #3, was kept`, or `the last, #3, expired: past days keep their plan`), read from the proposals themselves, so it never has to guess, even when you answered while it was still replying or in another window.
 
 ### New chat
 
@@ -339,7 +343,7 @@ Press `x` to end this organizer session and start a new one. A confirm dialog as
 
 ### Morning review
 
-At the first open each day, if mentor requests are pending, the organizer runs a morning review: it reads the pending requests, weighs them together with the week, and proposes one plan. If a proposal is already waiting, the review waits until you keep or discard it. A request that comes in later in the day waits for the next day, or you can ask the organizer to look at it.
+At the first open each day, if mentor requests are pending, the organizer runs a morning review: it reads the pending requests, weighs them together with the week, and proposes one plan. If a proposal is already waiting, the review waits until you keep or discard it, or it expires. A request that comes in later in the day waits for the next day, or you can ask the organizer to look at it.
 
 ### Organizer tools (MCP server)
 
@@ -353,7 +357,7 @@ Read tools:
 - `memory()`: list all memory notes
 
 Write tools:
-- `propose(operations, rationale, dispositions)`: propose schedule changes with request dispositions
+- `propose(operations, rationale, dispositions, replaces)`: propose schedule changes with request dispositions; `replaces` names the waiting proposal it replaces
 - `ask(subject, question)`: ask a mentor a question
 - `remember(note)`: remember a note
 - `forget(note_id)`: forget a memory note by id

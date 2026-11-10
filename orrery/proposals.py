@@ -10,10 +10,15 @@ from typing import Literal
 from orrery import board, channels, ledger, ops, schedule
 from orrery.model import Block, Plan, Template
 from orrery.ops import Op, OpError, to_json
+from orrery.organizer import sessions
 from orrery.text import fmt_day, has_verdict, phrase
 
 STALE = "the week changed since; nothing written — ask again"
 UNDO_CHANGED = "that change was changed since; undo skipped"
+EXPIRED = (
+    "proposal #{} can't apply any more: {}; its requests stay pending — ask the organizer for a"
+    " new one"
+)
 
 _WKD = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 _RESOLVED = {"grant": "granted", "partial": "partial", "decline": "declined"}
@@ -165,8 +170,10 @@ def propose(
     now: datetime,
     today: date,
     session_id: int | None = None,
+    replaces: int | None = None,
 ) -> Proposal:
-    """Store the one waiting proposal, replacing any other. Nothing else is written."""
+    """Store the one waiting proposal. While another waits it is refused unless replaces names
+    that one, which is then replaced, and orrery says so in the active chat."""
     plan, tmpl = _validate(conn, ops, today)
     for t in (rationale, *(d.note for d in dispositions)):
         if has_verdict(t):
@@ -186,7 +193,15 @@ def propose(
             raise OpError(f"request #{rid} needs a label")
     conn.execute("BEGIN IMMEDIATE")
     try:
-        conn.execute("update proposals set state = 'replaced' where state = 'waiting'")
+        (old,) = conn.execute("select max(id) from proposals where state = 'waiting'").fetchone()
+        if replaces != old:
+            raise OpError(
+                f"proposal #{replaces} isn't waiting; propose without replaces"
+                if old is None
+                else f"proposal #{old} is waiting for the user's y/n: fold its changes into a new"
+                f" proposal that passes replaces={old}, or wait for their answer"
+            )
+        conn.execute("update proposals set state = 'replaced' where id = ?", (old,))
         pid = conn.execute(
             "insert into proposals (created_at, author, ops, rationale, dispositions, expected,"
             " state, session_id) values (?, ?, ?, ?, ?, ?, 'waiting', ?)",
@@ -200,6 +215,10 @@ def propose(
                 session_id,
             ),
         ).lastrowid
+        chat = sessions.active(conn)
+        if old is not None and chat is not None:
+            said = f"proposal #{pid} replaces #{old} (#{old} was not kept)"
+            sessions.say(conn, chat.id, "orrery", said, now)
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
@@ -247,6 +266,52 @@ def _current(
     if _expected(p.ops, plan, tmpl) != expected:
         raise Stale(STALE)
     return p, plan, tmpl
+
+
+class _Raced(Exception):
+    """Another thread or window kept, expired or changed the waiting proposal meanwhile."""
+
+
+def _dead(conn: sqlite3.Connection, today: date) -> tuple[int, str] | None:
+    """The waiting proposal's id and why keep would refuse it today; None if none waits or it
+    would apply."""
+    (pid,) = conn.execute("select max(id) from proposals where state = 'waiting'").fetchone()
+    if pid is None:
+        return None
+    try:
+        _current(conn, pid, today)
+    except Stale:
+        return pid, "the week changed since"
+    except OpError as e:
+        return pid, str(e)
+    return None
+
+
+def expire(conn: sqlite3.Connection, *, now: datetime, today: date) -> str | None:
+    """The waiting proposal, if keep would refuse it today, set to discarded in an orrery
+    "expire" change whose reason says why, and said in the active chat: that line, returned.
+    Its requests stay pending. Rechecked under the write lock, so it happens once however many
+    threads or windows try, and never to one that would apply: None then, as when none waits."""
+    dead = _dead(conn, today)
+    if dead is None:
+        return None
+    pid, why = dead
+    line = EXPIRED.format(pid, why)
+    chat = sessions.ensure(conn, now).id  # an x after this discards it: the recheck sees that
+    try:
+        with ledger.change(
+            conn, actor="orrery", kind="expire", now=now, reason=why, proposal_id=pid
+        ):
+            if _dead(conn, today) != dead:
+                raise _Raced
+            conn.execute(
+                "update proposals set state = 'discarded', decided_at = ? where id = ?",
+                (now.isoformat(timespec="seconds"), pid),
+            )
+            sessions.say(conn, chat, "orrery", line, now)
+    except _Raced:
+        return None
+    return line
 
 
 def _cells(cells: Sequence[board.Cell]) -> list[tuple[str, bool]]:

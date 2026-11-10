@@ -1,7 +1,8 @@
 """Tests for proposals: propose, diff, keep, discard, undo."""
 
 import datetime as dt
-from contextlib import closing
+import threading
+from contextlib import closing, contextmanager
 
 import pytest
 from helpers import (
@@ -15,6 +16,7 @@ from helpers import (
 
 from orrery import channels, db, ledger, ops, proposals, schedule
 from orrery.model import Block, Subject
+from orrery.organizer import sessions
 
 NOW = dt.datetime(2026, 11, 12, 9, 0)
 TODAY = dt.date(2026, 11, 12)
@@ -37,8 +39,121 @@ def test_propose_keep_writes_and_logs(week_db):
 
 def test_one_waiting_proposal(week_db):
     a = propose_move(week_db)
-    b = propose_move(week_db)
+    b = propose_move(week_db, replaces=a.id)
     assert proposals.waiting(week_db).id == b.id and state_of(week_db, a.id) == "replaced"
+
+
+def _said(conn) -> list[str]:
+    return [r[0] for r in conn.execute("select text from transcript where speaker = 'orrery'")]
+
+
+def test_propose_is_refused_while_another_waits_unless_it_names_it(week_db):
+    """Nothing replaces a waiting proposal unseen: the organizer folds it in, naming it, or
+    waits for the user's y/n."""
+    a = propose_move(week_db)
+    for replaces in (None, a.id + 1):
+        with pytest.raises(ops.OpError) as e:
+            propose_move(week_db, rationale="again", replaces=replaces)
+        assert f"proposal #{a.id} is waiting for the user's y/n" in str(e.value)
+        assert f"replaces={a.id}" in str(e.value)
+    assert proposals.waiting(week_db).id == a.id
+    assert week_db.execute("select count(*) from proposals").fetchone()[0] == 1
+
+
+def test_replaces_with_nothing_waiting_is_refused(week_db):
+    with pytest.raises(ops.OpError, match="proposal #7 isn't waiting"):
+        propose_move(week_db, replaces=7)
+    assert proposals.waiting(week_db) is None
+
+
+def test_a_replacement_says_so_in_the_chat_once(week_db):
+    sessions.ensure(week_db, NOW)
+    a = propose_move(week_db)
+    b = propose_move(week_db, replaces=a.id)
+    assert _said(week_db) == [
+        "new chat started",
+        f"proposal #{b.id} replaces #{a.id} (#{a.id} was not kept)",
+    ]
+    with pytest.raises(ops.OpError):  # a's gone: naming it again replaces nothing
+        propose_move(week_db, replaces=a.id)
+    assert len(_said(week_db)) == 2
+
+
+EXPIRED = (
+    "proposal #{} can't apply any more: {}; its requests stay pending — ask the organizer for a"
+    " new one"
+)
+FRI_6AM = dt.datetime(2026, 11, 13, 6)  # past the 5:00 boundary: Thursday is a past day
+
+
+def test_a_proposal_whose_day_passed_expires_once_and_its_requests_stay_pending(week_db):
+    sessions.ensure(week_db, NOW)
+    rid = _request(week_db)
+    p = propose_move(
+        week_db,
+        ops=[ops.Move(THU, "math", "learn", FRI, for_request=rid)],
+        dispositions=[proposals.Disposition(rid, "grant")],
+    )
+    line = EXPIRED.format(p.id, "past days keep their plan")
+    assert proposals.expire(week_db, now=FRI_6AM, today=FRI) == line
+    assert proposals.expire(week_db, now=FRI_6AM, today=FRI) is None  # once
+    assert state_of(week_db, p.id) == "discarded" and proposals.waiting(week_db) is None
+    assert [m.id for m in channels.pending_requests(week_db)] == [rid]
+    assert _said(week_db) == ["new chat started", line]
+    assert propose_move(week_db, ops=[ops.Move(FRI, "math", "learn", SAT)], today=FRI)
+
+
+def test_a_proposal_that_still_applies_never_expires(week_db):
+    """Not on the day it was made, nor a day later when it touches no day."""
+    p = propose_move(week_db)
+    assert proposals.expire(week_db, now=NOW, today=TODAY) is None
+    proposals.discard(week_db, p.id, now=NOW)
+    t = propose_move(week_db, ops=[ops.TemplateSet(6, "main", "math", "rep", 1)])
+    assert proposals.expire(week_db, now=FRI_6AM, today=FRI) is None
+    assert proposals.waiting(week_db).id == t.id and _said(week_db) == []
+    assert week_db.execute("select count(*) from changes where kind = 'expire'").fetchone() == (0,)
+
+
+def test_a_proposal_the_week_changed_under_expires(week_db):
+    sessions.ensure(week_db, NOW)
+    keep_move(week_db, THU, "math", "learn", FRI)
+    p = propose_move(week_db, ops=[ops.Remove(FRI, "geography", "geography")])
+    proposals.undo_last(week_db, now=NOW, today=TODAY)  # Friday's plan isn't what p was shown on
+    line = EXPIRED.format(p.id, "the week changed since")
+    assert proposals.expire(week_db, now=NOW, today=TODAY) == line
+    assert state_of(week_db, p.id) == "discarded"
+
+
+def test_two_windows_expire_it_once(week_home, monkeypatch):
+    """Both find it can't apply; the first writes, the second finds nothing waiting."""
+    with closing(db.open_existing(week_home)) as conn:
+        sessions.ensure(conn, NOW)
+        p = propose_move(conn)
+    both, real = threading.Barrier(2), ledger.change
+
+    @contextmanager
+    def change(conn, **kw):  # each has read it as dead before either writes
+        both.wait(5)
+        with real(conn, **kw) as cid:
+            yield cid
+
+    monkeypatch.setattr(ledger, "change", change)
+    got = []
+
+    def window():
+        with closing(db.open_existing(week_home)) as conn:
+            got.append(proposals.expire(conn, now=FRI_6AM, today=FRI))
+
+    threads = [threading.Thread(target=window) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    line = EXPIRED.format(p.id, "past days keep their plan")
+    assert sorted(got, key=bool) == [None, line]
+    with closing(db.open_existing(week_home)) as conn:
+        assert _said(conn) == ["new chat started", line]
+        assert conn.execute("select count(*) from changes where kind = 'expire'").fetchone() == (1,)
 
 
 def test_keep_stale_when_week_changed(week_db):
@@ -51,6 +166,7 @@ def test_keep_stale_when_week_changed(week_db):
         author="organizer",
         now=NOW,
         today=TODAY,
+        replaces=p.id,
     )
     proposals.keep(week_db, other.id, now=NOW, today=TODAY)
     with pytest.raises(proposals.Stale, match="the week changed since"):

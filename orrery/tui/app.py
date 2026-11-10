@@ -3,11 +3,11 @@ organizer chat, and at the bottom T's theme picker over a key line generated fro
 
 The data root, the clock and the claude binary are injected so tests drive a synthetic
 database on a frozen Thursday, and a fake organizer. Each database read and write runs on a
-connection of its own, opened and closed by its thread: a reload (collect, the session, then
-the board, the chat's newest page and the waiting proposal) in the "collect" group; y, n and
-u in the "edit" group, each reloading after; an organizer turn in the "organizer" group, one
-at a time. The M and h popups, x's restart and the chat's older pages are short and run on
-the app's own thread.
+connection of its own, opened and closed by its thread: a reload (collect, the session, a
+waiting proposal's expiry, then the board, the chat's newest page and the waiting proposal) in
+the "collect" group; y, n and u in the "edit" group, each reloading after; an organizer turn
+in the "organizer" group, one at a time. The M and h popups, x's restart and the chat's older
+pages are short and run on the app's own thread.
 
 The Week tab's top panel is the week or the month (`view`; w and m switch, as does enter on
 a month's day), on one cursor date (`cursor_date`), which is the app's: a view asks to move it
@@ -125,13 +125,13 @@ def _names(names, current: str) -> Content:
 class Loaded:
     """One reload: the cursor's week, or the line saying why it can't be read; the day and
     boundary it was read for; the chat's newest page, oldest first, and when the active chat
-    began; the waiting proposal and its diff, or the line saying why they can't be; pending
-    requests; last_review from settings; and for the lower left panels today's week, its
-    subjects' weekly rates and the open questions per subject with any; the subjects' colour
-    slots, and the day orrery started. Then the view and the cursor date it was read for, the
-    month view's six weeks, and for the day panel each drawn day's sittings and changes. Then
-    the Report's window: its last week and range, its days, summary, best week and rhythm, the
-    strip's subjects (the active ones and any other planned in it), and every subject's
+    began; the waiting proposal and its diff; the line saying it expired, or why they can't be
+    shown; pending requests; last_review from settings; and for the lower left panels today's
+    week, its subjects' weekly rates and the open questions per subject with any; the subjects'
+    colour slots, and the day orrery started. Then the view and the cursor date it was read for,
+    the month view's six weeks, and for the day panel each drawn day's sittings and changes.
+    Then the Report's window: its last week and range, its days, summary, best week and rhythm,
+    the strip's subjects (the active ones and any other planned in it), and every subject's
     assessments."""
 
     board: WeekBoard | str
@@ -488,6 +488,11 @@ class OrreryApp(App):
             channels.collect(conn, now=now, today=day)
             monday = schedule.week_start(day)
             s = sessions.ensure(conn, now)  # a first open; x's restart inserts its own
+            try:  # a waiting proposal y can't keep today expires, before the chat is read
+                expired = proposals.expire(conn, now=now, today=day) or ""
+            except Exception:  # it stays waiting, its diff says why; the next reload tries again
+                logger.warning("waiting proposal not expired", exc_info=True)
+                expired = ""
             row = conn.execute("select value from settings where key = 'last_review'").fetchone()
             starts = schedule.starts(conn)
             # at the first read today, or the day orrery starts if that's later
@@ -511,6 +516,7 @@ class OrreryApp(App):
                 boundary,
                 talk=tuple(reversed(sessions.all_lines(conn, limit=PAGE))),
                 since=s.started_at,
+                note=expired,
                 pending=tuple(channels.pending_requests(conn)),
                 last_review=row[0] if row else None,
                 this_week=stats.week(conn, monday, day),

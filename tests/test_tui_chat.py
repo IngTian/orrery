@@ -405,6 +405,24 @@ async def test_n_on_a_proposal_kept_in_another_window_says_stale(week_home):
         assert state_of(conn, p.id) == "kept"
 
 
+async def test_a_replacement_shows_in_the_chat_as_orrery_says_it(week_home):
+    """The organizer's new proposal names the one waiting: the chat says the old was not kept."""
+    with closing(db.open_existing(week_home)) as conn:
+        a = propose_move(conn)
+    app = _app(week_home)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, app)
+        with closing(db.open_existing(week_home)) as conn:
+            b = propose_move(conn, rationale="lorem ipsum", replaces=a.id)
+        await pilot.press("r")
+        await settle(pilot, app)
+        assert _talk(app) == [
+            STARTED,
+            f"orrery: proposal #{b.id} replaces #{a.id} (#{a.id} was not kept)",
+        ]
+        assert app.shown_proposal == b.id
+
+
 async def test_a_keep_stands_when_its_chat_line_cannot_be_written(week_home, monkeypatch):
     """The keep commits before orrery's line: a locked chat can't make it read as failed."""
     with closing(db.open_existing(week_home)) as conn:

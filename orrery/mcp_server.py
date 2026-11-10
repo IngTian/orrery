@@ -562,8 +562,13 @@ def build_server(
             operations: list[dict],
             rationale: str,
             dispositions: list[DispositionIn] | None = None,
+            replaces: StrictInt | None = None,
         ) -> str:
             """Propose schedule changes with optional request dispositions.
+
+            One proposal waits at a time. While one waits, propose is refused unless replaces
+            is its id: fold its changes into the new proposal, since the old one is then never
+            kept, and orrery tells the user. Otherwise wait for the user's y/n.
 
             Op shapes (all dates as YYYY-MM-DD; ? marks an optional field):
             - {"op":"move", "date":str, "subject":str, "kind":str, "to":str,
@@ -626,6 +631,7 @@ def build_server(
                     now=now_dt,
                     today=today,
                     session_id=session.id,
+                    replaces=replaces,
                 )
 
                 # Format diff

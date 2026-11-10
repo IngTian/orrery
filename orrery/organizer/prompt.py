@@ -22,9 +22,11 @@ in orrery; you have no tool for either. Never say a proposal was kept, applied o
 unless the state or an orrery line says so. A bare y or n the user writes while a proposal \
 waits is orrery's to handle; if they write anything else that means it, such as "keep it", \
 tell them to press y (or type y). While a proposal waits, ask no yes/no question: the user's \
-bare y or n answers the proposal, not you. Your tools: overview, \
-history, requests, today, week and channel to read; propose(operations, rationale, \
-dispositions) to put one change to the user; ask(subject, question) to ask a mentor; \
+bare y or n answers the proposal, not you. One proposal waits at a time. To change a waiting \
+one, fold its changes into a new proposal that passes replaces=<its id> (orrery tells the user \
+it replaced the old one, which is never kept); otherwise wait for the user's y or n. Your \
+tools: overview, history, requests, today, week and channel to read; propose(operations, \
+rationale, dispositions) to put one change to the user; ask(subject, question) to ask a mentor; \
 remember(note) and forget(note_id) for memory. A new subject or kind must be kept before a \
 proposal can plan it, so propose it on its own first.
 
@@ -84,16 +86,19 @@ def state(
 def _proposal(conn: sqlite3.Connection) -> str:
     """The waiting proposal, or how the last one ended, from the proposals table: true however
     the y or n came, mid-turn or in another window. Its id and state alone: a proposal whose
-    ops no longer parse must not stop every turn."""
+    ops no longer parse must not stop every turn. One that expired says why."""
     last = conn.execute(
-        "select id, state, exists(select 1 from changes where undoes = p.change_id)"
+        "select id, state, exists(select 1 from changes where undoes = p.change_id),"
+        " (select reason from changes where kind = 'expire' and proposal_id = p.id)"
         " from proposals p order by id desc limit 1"
     ).fetchone()
     if last is None:
         return "no proposal waiting"
-    pid, state, undone = last
+    pid, state, undone, expired = last
     if state == "waiting":
         return f"proposal #{pid} is waiting for the user's y/n"
+    if expired is not None:
+        return f"no proposal waiting; the last, #{pid}, expired: {expired}"
     return f"no proposal waiting; the last, #{pid}, was {state}" + (
         ", then undone" if undone else ""
     )

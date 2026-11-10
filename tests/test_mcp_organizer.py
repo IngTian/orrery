@@ -365,6 +365,33 @@ async def test_propose_accepts_null_dispositions(week_home):
     assert not err and out.startswith("proposal #1 is waiting for the user:")
 
 
+async def test_propose_while_one_waits_must_name_it(week_home):
+    """Refused, saying what waits and how to replace it; named, it replaces it and orrery says
+    so in the chat."""
+    mv = {
+        "op": "move",
+        "date": "2026-11-12",
+        "subject": "math",
+        "kind": "learn",
+        "to": "2026-11-13",
+    }
+    err, out = await _call(week_home, "propose", {"operations": [mv], "rationale": "x"})
+    assert not err and out.startswith("proposal #1 is waiting for the user:")
+    for replaces in (None, 2):
+        err, out = await _call(
+            week_home, "propose", {"operations": [mv], "rationale": "y", "replaces": replaces}
+        )
+        assert err and "proposal #1 is waiting for the user's y/n" in out and "replaces=1" in out
+    err, out = await _call(
+        week_home, "propose", {"operations": [mv], "rationale": "y", "replaces": 1}
+    )
+    assert not err and out.startswith("proposal #2 is waiting for the user:")
+    with closing(db.open_existing(week_home)) as conn:
+        said = sessions.transcript(conn, sessions.active(conn).id)[-1]
+        assert (said.speaker, said.text) == ("orrery", "proposal #2 replaces #1 (#1 was not kept)")
+        assert proposals.waiting(conn).id == 2
+
+
 async def test_propose_text_marks_struck(week_home):
     """The model sees the strike: a block that moved away doesn't read as unchanged."""
     mv = {
@@ -411,7 +438,7 @@ _ORGANIZER_DOCS = {
     "history": "4a24949efde3b6fc",
     "requests": "8650715a57dcbd26",
     "memory": "9766cfdb7e026138",
-    "propose": "2b76360478dd5b7a",
+    "propose": "0f83550f05aec951",
     "ask": "c8a1047b9b5c0fa8",
     "remember": "fe8994a07f7c6c03",
     "forget": "6e651aaa1acdcd4e",
@@ -430,7 +457,7 @@ async def test_organizer_role_unchanged(week_home):
     async with Client(srv, mode="legacy") as c:
         assert c.instructions is None
         assert {t.name: _h(t.description) for t in (await c.list_tools()).tools} == _ORGANIZER_DOCS
-    assert _h(prompt.system()) == "117e9c69658a7bb3"
+    assert _h(prompt.system()) == "e006a36460ead8c6"
     _, today = await _call(week_home, "today", {"subject": "math"})
     assert today.startswith("<orrery:untrusted>Thu 11/12 · today\n")
     with closing(db.open_existing(week_home)) as conn:
