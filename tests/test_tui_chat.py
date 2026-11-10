@@ -339,15 +339,15 @@ DISCARDED_LINE = "orrery: discarded proposal #{}; its requests stay pending"
     "typed, state, note, said",
     [
         ("y", "kept", "kept", KEPT_LINE),
-        (" Yes ", "kept", "kept", KEPT_LINE),
+        (" Y ", "kept", "kept", KEPT_LINE),
         ("n", "discarded", "discarded; requests stay pending", DISCARDED_LINE),
-        ("NO", "discarded", "discarded; requests stay pending", DISCARDED_LINE),
+        ("N", "discarded", "discarded; requests stay pending", DISCARDED_LINE),
     ],
 )
 async def test_typing_y_or_n_answers_the_shown_proposal(
     week_home, tmp_path, typed, state, note, said
 ):
-    """A bare y, yes, n or no typed while the diff shows is the y or n key: never sent to the
+    """A bare y or n typed while the diff shows is the y or n key: never sent to the
     organizer, no turn, and orrery says what happened in the chat."""
     with closing(db.open_existing(week_home)) as conn:
         p = propose_move(conn)
@@ -424,7 +424,7 @@ async def test_a_keep_stands_when_its_chat_line_cannot_be_written(week_home, mon
         assert state_of(conn, p.id) == "kept"
 
 
-@pytest.mark.parametrize("waiting, typed", [(False, "y"), (True, "yes please")])
+@pytest.mark.parametrize("waiting, typed", [(False, "y"), (True, "yes please"), (True, "yes")])
 async def test_other_lines_and_y_without_a_proposal_go_to_the_organizer(
     week_home, tmp_path, waiting, typed
 ):
@@ -481,6 +481,16 @@ def test_an_organizer_line_shows_its_bold_and_drops_unpaired_markers():
     maths = render_line(Line("", "organizer", "x**2 + y**2"))  # inside words: as written
     assert maths.plain == "organizer: x**2 + y**2" and not maths.spans
     assert render_line(Line("", "you", "**as typed**")).plain == "you: **as typed**"
+
+
+def test_bold_next_to_chinese_text_is_still_bold():
+    """CJK characters aren't ASCII word characters: a pair beside them is bold, and a stray
+    marker beside them goes whole."""
+    c = render_line(Line("", "organizer", "今天**数学**很好"))
+    assert c.plain == "organizer: 今天数学很好"
+    (bold,) = [s for s in c.spans if s.style == "bold"]
+    assert c.plain[bold.start : bold.end] == "数学"
+    assert render_line(Line("", "organizer", "提案**已就绪")).plain == "organizer: 提案已就绪"
 
 
 async def test_the_streaming_reply_shows_its_bold(week_home, tmp_path):

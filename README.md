@@ -222,7 +222,7 @@ A pair (`←→`, `↑↓`, `[ ]`) is one hint on the line; `shift+tab` and `esc
 | `n` | no | (confirm) No: change nothing. |
 | `esc` | no | (confirm) As `n`. |
 
-While the chat input has focus, letters type into it and only `esc` and `enter` act there. `y` and `n` act on a waiting proposal once you leave the input, whichever tab is open; in the input, while a proposal's diff shows, a line that is only `y`, `yes`, `n` or `no` does the same when you press `enter`, even while the organizer is answering, instead of going to the organizer. While the organizer is answering, any other line and `x` start nothing; `esc` cancels the answer.
+While the chat input has focus, letters type into it and only `esc` and `enter` act there. `y` and `n` act on a waiting proposal once you leave the input, whichever tab is open; in the input, while a proposal's diff shows, a line that is only `y` or `n` does the same when you press `enter`, even while the organizer is answering, instead of going to the organizer. While the organizer is answering, any other line and `x` start nothing; `esc` cancels the answer.
 
 ## Themes
 

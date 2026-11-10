@@ -73,7 +73,8 @@ logger = logging.getLogger(__name__)
 UNAVAILABLE = "orrery: data unavailable ({})"
 KEPT = "kept"
 DISCARDED = "discarded; requests stay pending"
-ANSWERS = {"y": "y", "yes": "y", "n": "n", "no": "n"}  # typed, while a diff shows: its keys
+# typed, while a diff shows: its keys; never yes/no, which may answer the organizer
+ANSWERS = {"y": "y", "n": "n"}
 UNDONE = "undone"
 NOTHING_TO_UNDO = "nothing to undo"
 WORKING = "working… (esc cancels)"
@@ -816,7 +817,7 @@ class OrreryApp(App):
     def on_chat_panel_submitted(self, event: ChatPanel.Submitted) -> None:
         """The input's line: one organizer turn, the user's line and the working line shown at
         once, the input kept for the next. While a turn runs nothing starts, and the line
-        stays in the input. A bare y or n (yes, no) while a diff is shown is that key, as if
+        stays in the input. A bare y or n while a diff is shown is that key, as if
         pressed outside the input, even mid-turn: never the organizer's."""
         line = event.text.strip()
         if not line:

@@ -44,8 +44,11 @@ def _divider(line: Line) -> bool:
 
 
 # a **span** outside any word, its text starting and ending with neither space nor *
-_BOLD = re.compile(r"(?<!\w)\*\*(?=[^\s*])(.+?)(?<=[^\s*])\*\*(?!\w)")
-_STRAY = re.compile(r"(?<!\w)\*\*|\*\*(?!\w)")  # any other **, unless inside a word (x**2)
+# ASCII word characters only: next to CJK text a pair is still bold (\w would count 粗 as a word)
+_WORD = "A-Za-z0-9_"
+_BOLD = re.compile(rf"(?<![{_WORD}])\*\*(?=[^\s*])(.+?)(?<=[^\s*])\*\*(?![{_WORD}])")
+# any other **, unless inside a word (x**2)
+_STRAY = re.compile(rf"(?<![{_WORD}])\*\*|\*\*(?![{_WORD}])")
 
 
 def _reply(text: str) -> Content:
