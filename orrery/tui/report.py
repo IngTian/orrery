@@ -28,8 +28,7 @@ from orrery.stats import MIN_TIMED, Rhythm, Summary
 from orrery.text import fmt_day
 from orrery.tui import keymap
 from orrery.tui.cursor import CursorView, hue
-from orrery.tui.day import para
-from orrery.tui.diff import MUTED
+from orrery.tui.diff import MUTED, para
 from orrery.tui.heatmap import ALL, Heatmap
 from orrery.tui.views import panel_title
 from orrery.tui.week import CURSOR, FG, NAME, NOTHING_PLANNED, Lower, span

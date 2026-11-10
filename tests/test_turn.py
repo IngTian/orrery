@@ -263,6 +263,27 @@ def test_records_only_the_final_text_block(week_home, tmp_path, events, reply):
     assert _rows(week_home, 2) == [("you", "hi"), ("organizer", reply)]
 
 
+_FINAL = {"type": "assistant", "message": {"content": [{"type": "text", "text": "B"}]}}
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [block_start(), delta("A"), block_start("tool_use")],
+        [block_start(), delta("A"), block_start("tool_use"), _FINAL],
+        [block_start(), delta("A"), block_start("tool_use"), block_start(), delta("partial")],
+    ],
+    ids=["no-deltas", "assistant-event-only", "cut-off-block"],
+)
+def test_reply_is_the_results_text(week_home, tmp_path, events):
+    """The result's text is the final message's: it wins over the streamed block, which may
+    be the commentary before a final message that streamed no deltas, or a block cut off."""
+    fake = make_fake(tmp_path, {"events": [INIT_OK, *events, result_ok("B")]})
+    r = run(week_home, fake, "hi")
+    assert r == turn.TurnResult("B", True, None)
+    assert _rows(week_home, 2) == [("you", "hi"), ("organizer", "B")]
+
+
 def test_non_json_lines_are_skipped(week_home, tmp_path):
     events = ["hello", "", "[1, 2]", INIT_OK, "not json {", result_ok("ok")]
     r = run(week_home, make_fake(tmp_path, {"events": events}), "hi")

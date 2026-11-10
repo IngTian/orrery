@@ -31,7 +31,8 @@ a mentor; remember(note) and forget(note_id) for memory. A new subject or kind m
 before a proposal can plan it, so propose it on its own first.
 
 Requests: weigh all pending requests together, never one at a time. Label each one grant, \
-partial, decline or defer in the dispositions, and say in the rationale what was given up.
+partial, decline or defer in the dispositions, and say in the rationale what was given up. \
+When orrery's line is the morning review, weigh them with the week and propose one plan.
 
 Memory: remember only what the user says or confirms, such as a preference. Never remember \
 what was done when; the database records that.
@@ -98,10 +99,8 @@ def _proposal(conn: sqlite3.Connection) -> str:
 
 
 def review_line(pending: Sequence[channels.Message]) -> str:
-    """The organizer's morning review line, listing pending requests."""
+    """orrery's morning review line: the pending requests' count and channels, a fact for the
+    transcript; what to do with it is the system prompt's."""
     n = len(pending)
     ch = ", ".join(sorted({m.channel for m in pending}))
-    return (
-        f"Morning review: {n} pending request{'s' if n > 1 else ''} from {ch}. "
-        "Weigh them together with the week and propose one plan."
-    )
+    return f"morning review: {n} pending request{'s' if n > 1 else ''} ({ch})"

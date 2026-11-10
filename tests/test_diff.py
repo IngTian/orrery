@@ -22,7 +22,7 @@ def _styles_of(text: Content, line: str, part: str | None = None) -> set[str]:
 def test_diff_strikes_the_struck_phrase(week_db):
     p = propose_move(week_db, rationale="a [b]reason[/b]")
     lines = proposals.diff(week_db, p, THU)
-    text = render_diff(lines)
+    text = render_diff(lines, 80)
     rows = text.plain.split("\n")
     assert rows[:4] == [
         f"proposal #{p.id} · organizer",
@@ -42,6 +42,24 @@ def test_diff_strikes_the_struck_phrase(week_db):
     assert _styles_of(text, "+ Thu 11/12") == {"$accent"}
     styles = " ".join(str(s.style) for s in text.spans)
     assert "#" not in styles and "red" not in styles  # no hex and no red
+
+
+def test_a_narrow_diff_wraps_each_line_under_its_text(week_db):
+    """Wrapped, the rationale and the − and + lines hang two columns in, never at the edge;
+    the struck phrase stays struck across the wrap."""
+    p = propose_move(week_db, rationale="Thursday is full; Friday has room")
+    text = render_diff(proposals.diff(week_db, p, THU), 20)
+    rows = text.plain.split("\n")
+    assert rows[:5] == [
+        f"proposal #{p.id} · organizer",
+        "  Thursday is full;",
+        "  Friday has room",
+        "− Thu 11/12  math ·",
+        "  learn ×2,",
+    ]
+    assert all(cell_len(r) <= 20 and r[:1] in "−+ " and r[1:2] == " " for r in rows[1:])
+    struck = [text.plain[s.start : s.end] for s in text.spans if s.style == "strike"]
+    assert struck == ["math ·", "learn ×2"]  # the + Thu line's, split by the wrap
 
 
 def test_chat_bar_spans_the_width_on_every_line():

@@ -25,8 +25,8 @@ from test_tui import SIZE, _talk, _text, _until, _week
 from textual.geometry import Region
 from textual.strip import Strip
 
-from orrery import db, proposals, store, text
-from orrery.organizer import sessions, turn
+from orrery import channels, db, proposals, store, text
+from orrery.organizer import prompt, sessions, turn
 from orrery.organizer.sessions import Line
 from orrery.tui import keymap
 from orrery.tui.app import OrreryApp
@@ -561,6 +561,19 @@ def test_orrery_says_its_lines_muted_after_a_dot():
     assert _plain(render_line(divider, 60)) == [STARTED]
 
 
+def test_a_folded_word_keeps_the_hanging_indent():
+    """A word folded to fill its line leaves no space at the next one's start; CJK text,
+    folded whole, neither; an indent after a line break stays as written."""
+    long = render_line(Line("", "organizer", "a" * 76 + " bb cc"), 40)
+    assert _plain(long) == ["organizer", "  " + "a" * 38, "  " + "a" * 38, "  bb cc"]
+    cjk = render_line(Line("", "organizer", "面" * 38 + " y 保留。"), 40)
+    assert _plain(cjk) == ["organizer", "  " + "面" * 19, "  " + "面" * 19, "  y 保留。"]
+    dot = render_line(Line("", "orrery", "a" * 76 + " bb"), 40)
+    assert _plain(dot) == ["· " + "a" * 38, "  " + "a" * 38, "  bb"]
+    kept = render_line(Line("", "you", "one\n  indented two"), 40)
+    assert _plain(kept) == ["you", "  one", "    indented two"]
+
+
 def test_an_organizer_line_shows_its_bold_and_drops_unpaired_markers():
     """Content spans built by hand: only ** pairs are read, never markup; a stray ** goes."""
     said = Line("", "organizer", "**Proposal #1 ready.** see **Mon** [b]and[/b] **")
@@ -609,11 +622,17 @@ async def test_the_strip_shows_the_newest_message_on_one_line(week_home):
         assert _text(app, "#strip") == "organizer: Proposal #3 ready. …"
 
 
+REVIEW = prompt.review_line(
+    [
+        channels.Message(i, ch, "request", f"mentor:{ch}", {}, "x", None, f"r{i}", "pending", "")
+        for i, ch in enumerate(("math", "finance", "math"))
+    ]
+)
 TALK = (
     ("you", "have you updated the schedule?"),
     ("organizer", "Not yet: #1 is still waiting."),
     ("orrery", "discarded proposal #1; its requests stay pending"),
-    ("orrery", "morning review: 2 pending requests from finance, math"),
+    ("orrery", REVIEW),  # the line the morning review records, as it is
     (
         "organizer",
         "**Proposal #3 ready.** Math learn moves from Thursday to Friday; finance rep stays on"
@@ -657,8 +676,8 @@ async def test_the_chat_reads_as_messages_a_blank_line_apart(week_home):
             "",
             "· discarded proposal #1; its",
             "  requests stay pending",
-            "· morning review: 2 pending",
-            "  requests from finance, math",
+            "· morning review: 3 pending",
+            "  requests (finance, math)",
             "",
             "organizer",
             "  Proposal #3 ready. Math learn",
@@ -680,7 +699,7 @@ async def test_the_chat_reads_as_messages_a_blank_line_apart(week_home):
             "  Not yet: #1 is still waiting.",
             "",
             "· discarded proposal #1; its requests stay pending",
-            "· morning review: 2 pending requests from finance, math",
+            "· morning review: 3 pending requests (finance, math)",
             "",
             "organizer",
             "  Proposal #3 ready. Math learn moves from Thursday to Friday;",

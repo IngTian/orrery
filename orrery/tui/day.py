@@ -24,7 +24,7 @@ from orrery.board import Cell, DayBoard, WeekBoard
 from orrery.stats import SessionRow
 from orrery.text import fmt_day, phrase
 from orrery.tui.cursor import hue
-from orrery.tui.diff import MUTED
+from orrery.tui.diff import MUTED, para
 from orrery.tui.views import panel_title
 from orrery.tui.week import BEFORE, FG, GROUPS, NAME, STRUCK, edged, pips, short_day
 
@@ -114,13 +114,6 @@ def block_text(b: Block) -> str:
     lines += [f"due: {x}" for x in b.due]
     reports = [s + (f" · {note}" if note else "") for s, note in map(sitting, b.rows)]
     return "\n".join([*lines, "", *(reports or ["no reports filed"])])
-
-
-def para(first: Content, rest: Content, text: Content, width: int) -> list[Content]:
-    """text wrapped to what first leaves of width, after first on its first line and rest
-    (as wide) on the others: nothing of it is cut."""
-    lines = text.wrap(max(1, width - first.cell_length))
-    return [Content.assemble(rest if i else first, line) for i, line in enumerate(lines)]
 
 
 class DayText(Widget):

@@ -32,8 +32,7 @@ from orrery.organizer.sessions import Line
 from orrery.proposals import DiffLine
 from orrery.text import fmt_day
 from orrery.tui import keymap
-from orrery.tui.day import para
-from orrery.tui.diff import MUTED, chat_bar, render_diff
+from orrery.tui.diff import INDENT, MUTED, chat_bar, para, render_diff
 from orrery.tui.themes import ThemePicker
 from orrery.tui.views import panel_title
 
@@ -43,7 +42,6 @@ STARTED = "new chat started"  # every session's first row: shown as its divider
 WAITING = "proposal waiting: c shows it"
 HINT = "press c, then ask orrery to move, add or report a session"
 _HEAD = {"you": "bold $text-accent", "organizer": "bold $text-primary"}
-INDENT = Content("  ")
 
 
 def _day(at: str) -> str:
@@ -153,8 +151,11 @@ class _Proposal(Static):
         if not self.diff:
             self.update("")
             return
-        bar = chat_bar(keymap.footer("proposal"), self.content_size.width)
-        self.update(Content("\n").join([render_diff(list(self.diff)), bar]))
+        w = self.content_size.width
+        if not w:  # not laid out yet: painted on its first resize
+            return
+        bar = chat_bar(keymap.footer("proposal"), w)
+        self.update(Content("\n").join([render_diff(list(self.diff), w), bar]))
 
 
 class _Log(VerticalScroll, can_focus=False):

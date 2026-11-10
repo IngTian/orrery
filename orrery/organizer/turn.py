@@ -193,8 +193,9 @@ def _attempt(
     deadline: float,
 ) -> tuple[str, str | None]:
     """Run one subprocess; returns (reply, None) if ok, else ("", the problem). The reply is
-    the turn's last text block that says anything, so the commentary between tool calls goes;
-    on_text hears each text block as it streams, afresh."""
+    the final message's text (the result's), or, if it has none, the last streamed text block
+    that says anything, so the commentary between tool calls goes; on_text hears each text
+    block as it streams, afresh."""
     stopped: list[str] = []  # set by the watchdog
     refused = None  # set at init
     init_seen = False
@@ -277,7 +278,9 @@ def _attempt(
     if init_seen and r.get("is_error") is False:
         if r.get("permission_denials"):
             return "", NO_TOOLS
-        return last or r.get("result") or "", None  # result: the last text block too
+        # result: the final message's text; last covers a final message with none
+        res = str(r.get("result") or "")
+        return (res if res.strip() else last), None
     errors = map(str, r.get("errors") or [])
     said = " ".join([str(r.get("result") or ""), *errors]).lower()
     stderr_text = raw_err.lower()

@@ -675,7 +675,7 @@ class _Plain(App):
 
     def compose(self) -> ComposeResult:
         yield Static(Content("\n").join(keymap.key_rows("week", 78)), id="footer")
-        yield Static(render_diff(self.diff), id="diff")
+        yield Static(render_diff(self.diff, 78), id="diff")
         yield Static(chat_bar(keymap.footer("proposal"), 30), id="bar")
 
 

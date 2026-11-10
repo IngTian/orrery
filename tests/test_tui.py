@@ -148,12 +148,16 @@ async def test_y_keeps_shown_proposal(week_home):
     async with app.run_test(size=SIZE) as pilot:
         await settle(pilot, app)
         diff = [line.rstrip() for line in _text(app, "#proposal").splitlines()]
-        assert diff == [
+        assert diff == [  # wrapped to the docked panel, each line under its text
             f"proposal #{p.id} · organizer",
-            "− Thu 11/12  math · learn ×2, geography ×1",
-            "+ Thu 11/12  math · learn ×2, geography ×1",
-            "− Fri 11/13  math · learn ×2, geography ×1",
-            "+ Fri 11/13  math · learn ×4, geography ×1",
+            "− Thu 11/12  math · learn ×2,",
+            "  geography ×1",
+            "+ Thu 11/12  math · learn ×2,",
+            "  geography ×1",
+            "− Fri 11/13  math · learn ×2,",
+            "  geography ×1",
+            "+ Fri 11/13  math · learn ×4,",
+            "  geography ×1",
             "y keep · n discard",
         ]
         spans = app.query_one("#proposal", Static).content.spans
