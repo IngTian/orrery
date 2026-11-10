@@ -77,7 +77,7 @@ DISCARDED = "discarded; requests stay pending"
 ANSWERS = {"y": "y", "n": "n"}
 UNDONE = "undone"
 NOTHING_TO_UNDO = "nothing to undo"
-WORKING = "working… (esc cancels)"
+WORKING = "working (esc cancels)"  # shown as the organizer's: after its "… "
 STILL_ANSWERING = "the organizer is still answering; esc cancels"
 NEW_CHAT = "End this organizer session and start a new one? Its transcript is kept; memory stays."
 NO_NOTES = "no notes"
@@ -104,14 +104,16 @@ def _window(last: date, starts: date, day: date, weeks: int) -> date:
     return min(max(lo, schedule.week_start(last)), hi)
 
 
-def _tell(conn: sqlite3.Connection, now: datetime, line: str) -> None:
-    """orrery's line in the active chat, for the organizer's next turn to hear. Best effort:
-    the change it reports is already committed, and the organizer's state has the proposal's
-    outcome anyway."""
+def _tell(conn: sqlite3.Connection, now: datetime, line: str, note: str) -> str:
+    """orrery's line in the active chat, for the organizer's next turn to hear; the note to
+    show: "" once the chat says it, else note. Best effort: the change it reports is already
+    committed, and the organizer's state has the proposal's outcome anyway."""
     try:
         sessions.say(conn, sessions.ensure(conn, now).id, "orrery", line, now)
     except Exception:
         logger.warning("chat line not recorded: %s", line, exc_info=True)
+        return note
+    return ""
 
 
 def _names(names, current: str) -> Content:
@@ -125,14 +127,14 @@ def _names(names, current: str) -> Content:
 class Loaded:
     """One reload: the cursor's week, or the line saying why it can't be read; the day and
     boundary it was read for; the chat's newest page, oldest first, and when the active chat
-    began; the waiting proposal and its diff, or the line saying why they can't be shown; the
-    line saying this read expired one; pending requests; last_review from settings; and for
-    the lower left panels today's week, its subjects' weekly rates and the open questions per
-    subject with any; the subjects' colour slots, and the day orrery started. Then the view and
-    the cursor date it was read for, the month view's six weeks, and for the day panel each
-    drawn day's sittings and changes. Then the Report's window: its last week and range, its
-    days, summary, best week and rhythm, the strip's subjects (the active ones and any other
-    planned in it), and every subject's assessments."""
+    began; the waiting proposal and its diff, or the line saying why they can't be shown;
+    whether this read expired one (the chat says why); pending requests; last_review from
+    settings; and for the lower left panels today's week, its subjects' weekly rates and the
+    open questions per subject with any; the subjects' colour slots, and the day orrery
+    started. Then the view and the cursor date it was read for, the month view's six weeks,
+    and for the day panel each drawn day's sittings and changes. Then the Report's window: its
+    last week and range, its days, summary, best week and rhythm, the strip's subjects (the
+    active ones and any other planned in it), and every subject's assessments."""
 
     board: WeekBoard | str
     day: date | None = None
@@ -142,7 +144,7 @@ class Loaded:
     proposal: int | None = None
     diff: tuple[DiffLine, ...] = ()
     note: str = ""
-    expired: str = ""
+    expired: bool = False
     pending: tuple[channels.Message, ...] = ()
     last_review: str | None = None
     this_week: WeekBoard | None = None
@@ -478,9 +480,6 @@ class OrreryApp(App):
             got = Loaded(UNAVAILABLE.format(e))
         if not get_current_worker().is_cancelled:  # a newer reload draws instead
             self.call_from_thread(self._loaded, got)
-        elif got.expired:  # but finds nothing waiting: the line is this one's to show.
-            # call_later posts a message: thread-safe, and a no-op once the app is closing
-            self.call_later(lambda: self.query_one(ChatPanel).note(got.expired))
 
     def _read(self) -> Loaded:
         got = self._connect()
@@ -493,10 +492,10 @@ class OrreryApp(App):
             monday = schedule.week_start(day)
             s = sessions.ensure(conn, now)  # a first open; x's restart inserts its own
             try:  # a waiting proposal y can't keep today expires, before the chat is read
-                expired = proposals.expire(conn, now=now, today=day) or ""
+                expired = proposals.expire(conn, now=now, today=day) is not None
             except Exception:  # it stays waiting, its diff says why; the next reload tries again
                 logger.warning("waiting proposal not expired", exc_info=True)
-                expired = ""
+                expired = False
             row = conn.execute("select value from settings where key = 'last_review'").fetchone()
             starts = schedule.starts(conn)
             # at the first read today, or the day orrery starts if that's later
@@ -620,8 +619,8 @@ class OrreryApp(App):
             chat.stream(None)  # and a line it never recorded (busy, say) was never sent
             chat.drop_pending()
         chat.show_proposal(got.diff)
-        if line := got.expired or got.note:
-            chat.note(line)
+        if got.note or got.expired:  # expired: the chat says why, so a failed y's note goes
+            chat.note(got.note)
         self._maybe_review(got.pending, got.day, got.last_review)
 
     @work(thread=True, group="edit")
@@ -770,7 +769,8 @@ class OrreryApp(App):
                 notes = [
                     f"remembered: {t}" for i, t in self._memory().items() if before.get(i) != t
                 ]
-                said = "\n".join([*notes, *([r.line] if r.line else [])])
+                # a line the transcript has shows there, never again as the note
+                said = "\n".join([*notes, *([r.line] if r.line and not r.recorded else [])])
         except Exception as e:  # run_turn never raises; the reads around it might
             logger.warning("organizer turn failed", exc_info=True)
             said = UNAVAILABLE.format(e)
@@ -797,8 +797,7 @@ class OrreryApp(App):
 
         def keep(conn: sqlite3.Connection, now: datetime, today: date) -> str:
             proposals.keep(conn, pid, now=now, today=today)
-            _tell(conn, now, f"kept proposal #{pid}")
-            return KEPT
+            return _tell(conn, now, f"kept proposal #{pid}", KEPT)
 
         self._edit(keep)
 
@@ -807,8 +806,8 @@ class OrreryApp(App):
 
         def discard(conn: sqlite3.Connection, now: datetime, today: date) -> str:
             proposals.discard(conn, pid, now=now)
-            _tell(conn, now, f"discarded proposal #{pid}; its requests stay pending")
-            return DISCARDED
+            said = f"discarded proposal #{pid}; its requests stay pending"
+            return _tell(conn, now, said, DISCARDED)
 
         self._edit(discard)
 
@@ -816,8 +815,7 @@ class OrreryApp(App):
         def undo(conn: sqlite3.Connection, now: datetime, today: date) -> str:
             if not proposals.undo_last(conn, now=now, today=today):
                 return NOTHING_TO_UNDO
-            _tell(conn, now, "undid the last kept proposal")
-            return UNDONE
+            return _tell(conn, now, "undid the last kept proposal", UNDONE)
 
         self._edit(undo)
 

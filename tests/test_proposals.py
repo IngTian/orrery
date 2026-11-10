@@ -89,6 +89,25 @@ def test_replaces_naming_one_answered_meanwhile_says_how_it_ended(week_db):
     assert proposals.waiting(week_db) is None
 
 
+def test_replaces_naming_one_the_user_turned_down_says_so(week_db):
+    """Discarded with n, or kept and then undone: the user turned it down, so a re-filed
+    proposal leaves its changes out unless they ask for them."""
+    a = propose_move(week_db)
+    proposals.discard(week_db, a.id, now=NOW)
+    b = propose_move(week_db)
+    proposals.keep(week_db, b.id, now=NOW, today=TODAY)
+    proposals.undo_last(week_db, now=NOW, today=TODAY)
+    add = [ops.Add(SAT, "main", "math", "learn", 1)]
+    for pid, how in ((a.id, "was discarded"), (b.id, "was kept, then undone")):
+        with pytest.raises(ops.OpError) as e:
+            propose_move(week_db, ops=add, replaces=pid)
+        assert str(e.value) == (
+            f"proposal #{pid} {how}; none waits, so propose without replaces, leaving out its"
+            " changes unless the user asks for them: they turned it down"
+        )
+    assert proposals.waiting(week_db) is None
+
+
 def test_a_replacement_says_so_in_the_chat_once(week_db):
     sessions.ensure(week_db, NOW)
     a = propose_move(week_db)

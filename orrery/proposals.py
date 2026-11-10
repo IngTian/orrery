@@ -19,6 +19,8 @@ EXPIRED = (
     "proposal #{} can't apply any more: {}; its requests stay pending — ask the organizer for a"
     " new one"
 )
+# a refused replaces naming one the user discarded, or kept and undid
+_TURNED_DOWN = ", leaving out its changes unless the user asks for them: they turned it down"
 
 _WKD = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 _RESOLVED = {"grant": "granted", "partial": "partial", "decline": "declined"}
@@ -211,7 +213,11 @@ def propose(
             how = ended(conn, replaces)
             if how is None:
                 raise OpError(f"proposal #{replaces} isn't waiting; propose without replaces")
-            tail = ", leaving out its changes: they're in the week now" if how == "was kept" else ""
+            tail = {
+                "was kept": ", leaving out its changes: they're in the week now",
+                "was discarded": _TURNED_DOWN,
+                "was kept, then undone": _TURNED_DOWN,
+            }.get(how, "")
             raise OpError(
                 f"proposal #{replaces} {how}; none waits, so propose without replaces{tail}"
             )

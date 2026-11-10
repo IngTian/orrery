@@ -643,7 +643,9 @@ def build_server(
                     replaces=replaces,
                 )
 
-                return f"proposal #{p.id} is waiting for the user:\n{_diff_text(conn, p.id, today)}"
+                # its diff quotes mentor requests: fenced, as in the refusal below
+                diff = wrap(_diff_text(conn, p.id, today))
+                return f"proposal #{p.id} is waiting for the user:\n{diff}"
             except proposals.Waiting as e:  # what waits, for the new one to fold in
                 raise ToolError(f"{e}. It reads:\n{wrap(_diff_text(conn, e.pid, today))}") from None
             except (ops.OpError, ValueError) as e:

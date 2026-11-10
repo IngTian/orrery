@@ -24,6 +24,7 @@ from orrery import board, channels, db, proposals, settings
 from orrery.__main__ import main
 from orrery.tui import keymap, views, week
 from orrery.tui.app import OrreryApp
+from orrery.tui.chat import summary
 from orrery.tui.week import WeekView
 
 SIZE = (120, 40)  # the timetable beside the docked chat
@@ -39,6 +40,12 @@ def _app(home, now: datetime = NOW) -> OrreryApp:
 
 def _text(app: OrreryApp, selector: str) -> str:
     return str(app.screen.query_one(selector, Static).content)
+
+
+def _talk(app: OrreryApp) -> list[str]:
+    """The chat's rows as shown, oldest first, then the turn in progress: each on one line,
+    as the strip says it."""
+    return [summary(w.line, w.live) for w in app.query("#log > .row") if w.display]
 
 
 def _key_line(tab: str) -> str:
@@ -154,8 +161,9 @@ async def test_y_keeps_shown_proposal(week_home):
         assert "→ Fri" not in _week(app)
         await pilot.press("y")
         await settle(pilot, app)
-        assert _text(app, "#note") == "kept" and not app.query_one("#proposal").display
-        assert "→ Fri 13" in _week(app)
+        assert not app.query_one("#proposal").display and "→ Fri 13" in _week(app)
+        assert _talk(app)[-1] == f"orrery: kept proposal #{p.id}"
+        assert not app.query_one("#note").display, "the chat says it: no note repeats it"
     with closing(db.open_existing(week_home)) as conn:
         assert proposals.waiting(conn) is None and state_of(conn, p.id) == "kept"
 
@@ -181,7 +189,7 @@ async def test_a_second_y_before_the_reload_does_nothing(week_home, monkeypatch)
             await pilot.press("y")
             gate.set()
             await settle(pilot, app)
-            assert calls == [p.id] and _text(app, "#note") == "kept"
+            assert calls == [p.id] and _talk(app).count(f"orrery: kept proposal #{p.id}") == 1
     finally:
         gate.set()
 
@@ -213,14 +221,12 @@ async def test_n_discards(week_home):
         await settle(pilot, app)
         await pilot.press("n")
         await settle(pilot, app)
-        assert _text(app, "#note") == "discarded; requests stay pending"
+        said = [f"orrery: discarded proposal #{p.id}; its requests stay pending"]
+        assert _talk(app)[-1:] == said and not app.query_one("#note").display
         await pilot.press("y", "n")  # nothing is shown now: neither key does anything
         await settle(pilot, app)
-        assert _text(app, "#note") == "discarded; requests stay pending"
+        assert _talk(app)[-1:] == said and not app.query_one("#note").display
         assert "→ Fri" not in _week(app)
-        await pilot.press("r")  # a key's line lasts until the next key
-        await settle(pilot, app)
-        assert not app.query_one("#note").display
     with closing(db.open_existing(week_home)) as conn:
         assert state_of(conn, p.id) == "discarded"
 
@@ -233,12 +239,16 @@ async def test_u_undoes(week_home):
         assert "→ Fri 13" in _week(app)
         await pilot.press("u")
         await settle(pilot, app)
-        assert _text(app, "#note") == "undone"
+        assert _talk(app)[-1] == "orrery: undid the last kept proposal"
+        assert not app.query_one("#note").display
         assert "→ Fri" not in _week(app)
         assert [x for x in _column(app, 3) if x][1:3] == ["▌math", "▌learn ○○"]
         await pilot.press("u")
         await settle(pilot, app)
-        assert _text(app, "#note") == "nothing to undo"
+        assert _text(app, "#note") == "nothing to undo"  # no chat line: the note says it
+        await pilot.press("r")  # a key's line lasts until the next key
+        await settle(pilot, app)
+        assert not app.query_one("#note").display
 
 
 async def test_u_says_why_it_cant(week_home):
@@ -281,15 +291,10 @@ EXPIRED = (
 )
 
 
-def _talk(app: OrreryApp) -> list[str]:
-    """The chat's rows as shown, oldest first."""
-    return [str(w.content) for w in app.query("#log > .row") if w.display]
-
-
 def _expired(app: OrreryApp, home, pid: int) -> None:
-    """pid expired, said once as the note and in the chat, and the panel gone."""
+    """pid expired, said once in the chat (no note repeats it), and the panel gone."""
     line = EXPIRED.format(pid, "past days keep their plan")
-    assert _text(app, "#note") == line
+    assert not app.query_one("#note").display
     assert not app.query_one("#proposal").display and app.shown_proposal is None
     assert _talk(app).count(f"orrery: {line}") == 1
     with closing(db.open_existing(home)) as conn:
@@ -354,9 +359,9 @@ async def test_a_failed_y_expires_it_at_once(week_home):
         _expired(app, week_home, pid)
 
 
-async def test_the_expiry_note_survives_a_newer_reload(week_home, monkeypatch):
+async def test_an_expiry_overtaken_by_a_newer_reload_still_shows(week_home, monkeypatch):
     """The read that expired it is overtaken (w, m, a Shift across weeks) and never drawn; the
-    newer one finds nothing waiting. The line still shows as the note."""
+    newer one finds nothing waiting, and shows the chat's line saying it expired."""
     with closing(db.open_existing(week_home)) as conn:
         pid = propose_move(conn).id
     held, release, real = threading.Event(), threading.Event(), proposals.expire
@@ -393,15 +398,14 @@ MOVE_0 = {"op": "move", "date": "2026-11-12", "subject": "math", "kind": "learn"
     ],
 )
 async def test_a_bad_stored_proposal_leaves_the_board_up(week_home, op, line):
-    """One keep would refuse expires, and says why."""
+    """One keep would refuse expires, and the chat says why."""
     with closing(db.open_existing(week_home)) as conn:
         store_waiting(conn, [op])
     app = _app(week_home)
     async with app.run_test(size=SIZE) as pilot:
         await settle(pilot, app)
         assert [x for x in _column(app, 3) if x][1:3] == ["▌math", "▌learn ○○"]
-        shown = f"{_text(app, '#note')}\n{_text(app, '#proposal')}"
-        assert line in [ln.strip() for ln in shown.splitlines()]
+        assert _talk(app)[-1] == f"orrery: {line}" and not app.query_one("#proposal").display
 
 
 async def test_markup_and_long_text_render_literally(week_home):

@@ -51,7 +51,8 @@ organizer. The overview's first line names the day orrery starts: days before it
 
 Replies: call tools silently, then write one reply after them, never commentary on your own \
 tool use. The chat is a terminal that shows no Markdown: replies, rationale and notes are \
-plain sentences, with no **, #, backticks or bullet syntax. Keep replies short: a few lines.
+plain sentences, with no **, #, backticks or bullet syntax. Replies are 2–4 short lines unless \
+the user asks for detail; don't list every request unless they ask.
 
 {fence.CORPUS_NOTICE}"""
 
